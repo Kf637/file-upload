@@ -12,6 +12,7 @@ import hashlib
 import re
 import threading
 import time
+import ipaddress
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -84,6 +85,11 @@ def get_db_connection():
         conn.execute('ALTER TABLE files ADD COLUMN username TEXT')
     except sqlite3.OperationalError:
         pass
+    # add method column if missing (stores 'Webpage' or 'API')
+    try:
+        conn.execute('ALTER TABLE files ADD COLUMN method TEXT')
+    except sqlite3.OperationalError:
+        pass
     return conn
 
 # Generate a random token
@@ -128,26 +134,31 @@ def upload_file():
         uploaded.save(save_path)
         # enforce role-based size limit
         size = os.path.getsize(save_path)
+        # enforce 10MB for Limited users, 100MB for others
         if role == 'Limited' and size > 10 * 1024 * 1024:
             os.remove(save_path)
             return render_template('upload.html', error='File too large for Limited account (max 10MB)')
-        elif role == 'user' and size > 100 * 1024 * 1024:
+        elif size > 100 * 1024 * 1024:
             os.remove(save_path)
-            return render_template('upload.html', error='File too large for user account (max 100MB)')
-        # determine expiration based on user selection (days or infinite)
+            return render_template('upload.html', error='File too large (max 100MB)')
+        # determine expiration: Limited users get max 1 day; others choose days or infinite
         expire_option = request.form.get('expire')
-        if expire_option == 'INF':
-            expires_at = None
+        if role == 'Limited':
+            # Limited accounts only get 1-day storage
+            expires_at = (datetime.utcnow() + timedelta(days=1)).isoformat()
         else:
-            # expire_option is number of days
-            expires_at = (datetime.utcnow() + timedelta(days=int(expire_option))).isoformat()
+            if expire_option == 'INF':
+                expires_at = None
+            else:
+                # expire_option is number of days
+                expires_at = (datetime.utcnow() + timedelta(days=int(expire_option))).isoformat()
         # Insert record into DB with expiration, uploader IP and user
         uploader_ip = get_client_ip()
         user = session['username']
         conn = get_db_connection()
         conn.execute(
-            'INSERT INTO files (token, stored_name, original_name, expires_at, uploader_ip, username) VALUES (?, ?, ?, ?, ?, ?)',
-            (token, stored_name, original_name, expires_at, uploader_ip, user)
+            'INSERT INTO files (token, stored_name, original_name, expires_at, uploader_ip, username, method) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (token, stored_name, original_name, expires_at, uploader_ip, user, 'Webpage')
         )
         conn.commit()
         conn.close()
@@ -290,6 +301,12 @@ def admin():
         # IP ban management
         if action == 'ban_ip':
             ip_to_ban = request.form.get('ip')
+            # Validate that it's a real IPv4 or IPv6 address
+            try:
+                ipaddress.ip_address(ip_to_ban)
+            except ValueError:
+                flash('Invalid IP address')
+                return redirect(url_for('admin'))
             conn_b = get_banned_db_connection()
             conn_b.execute('INSERT OR IGNORE INTO banned_ips (ip, banned_at) VALUES (?, ?)', (ip_to_ban, datetime.utcnow().isoformat()))
             conn_b.commit()
@@ -351,7 +368,7 @@ def admin():
     users = conn_u.execute('SELECT username, role, last_ip FROM users').fetchall()
     conn_u.close()
     conn_f = get_db_connection()
-    files_records = conn_f.execute('SELECT token, stored_name, original_name, expires_at, uploader_ip, username FROM files').fetchall()
+    files_records = conn_f.execute('SELECT token, stored_name, original_name, expires_at, uploader_ip, username, method FROM files').fetchall()
     conn_f.close()
     # format file entries with human-readable size and expiration (show in GMT+2)
     def human_size(num):
@@ -361,7 +378,7 @@ def admin():
             num /= 1024.0
         return f"{num:.2f} PB"
     formatted = []
-    for token, stored_name, name, expires_at, ip, user in files_records:
+    for token, stored_name, name, expires_at, ip, user, method in files_records:
         # compute size
         path = os.path.join(UPLOAD_FOLDER, stored_name)
         try:
@@ -380,7 +397,7 @@ def admin():
                 exp_str = expires_at
         else:
             exp_str = 'INF'
-        formatted.append((token, name, size_str, exp_str, ip, user))
+        formatted.append((token, name, size_str, exp_str, ip, user, method))
     # fetch banned IPs
     conn_b = get_banned_db_connection()
     b_rows = conn_b.execute('SELECT ip, banned_at FROM banned_ips').fetchall()
@@ -420,9 +437,20 @@ def ban_ip():
     conn_u.close()
     if not row or row[0] != 'admin':
         abort(403)
+
     ip_to_ban = request.form.get('ip')
+    # Validate that it's a real IPv4 or IPv6 address
+    try:
+        ipaddress.ip_address(ip_to_ban)
+    except ValueError:
+        flash('Invalid IP address')
+        return redirect(url_for('admin'))
+
     conn_b = get_banned_db_connection()
-    conn_b.execute('INSERT OR IGNORE INTO banned_ips (ip, banned_at) VALUES (?, ?)', (ip_to_ban, datetime.utcnow().isoformat()))
+    conn_b.execute(
+        'INSERT OR IGNORE INTO banned_ips (ip, banned_at) VALUES (?, ?)',
+        (ip_to_ban, datetime.utcnow().isoformat())
+    )
     conn_b.commit()
     conn_b.close()
     flash(f'IP {ip_to_ban} banned')
@@ -453,13 +481,13 @@ def API_upload():
     api_key = request.headers.get('X-API-Key') or request.args.get('X-API-Key')
     if not api_key:
         return jsonify({'error': 'API key required'}), 401
-    # validate API key
+    # validate API key and fetch user role
     conn_u = get_user_db_connection()
-    row = conn_u.execute('SELECT username FROM users WHERE api_key = ?', (api_key,)).fetchone()
+    row = conn_u.execute('SELECT username, role FROM users WHERE api_key = ?', (api_key,)).fetchone()
     conn_u.close()
     if not row:
         return jsonify({'error': 'Invalid API key'}), 401
-    username = row[0]
+    username, role = row
     # require multipart upload
     file = request.files.get('file')
     if not file or not file.filename:
@@ -469,14 +497,22 @@ def API_upload():
     stored_name = f"{token}_{original_name}"
     save_path = os.path.join(UPLOAD_FOLDER, stored_name)
     file.save(save_path)
+    # enforce size limits: Limited users max 10MB, others max 100MB
+    size = os.path.getsize(save_path)
+    if role == 'Limited' and size > 10 * 1024 * 1024:
+        os.remove(save_path)
+        return jsonify({'error': 'File too large for Limited account (max 10MB)'}), 413
+    elif size > 100 * 1024 * 1024:
+        os.remove(save_path)
+        return jsonify({'error': 'File too large (max 100MB)'}), 413
     # always expire in 7 days
     expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
     # record in database
     uploader_ip = get_client_ip()
     conn = get_db_connection()
     conn.execute(
-        'INSERT INTO files (token, stored_name, original_name, expires_at, uploader_ip, username) VALUES (?, ?, ?, ?, ?, ?)',
-        (token, stored_name, original_name, expires_at, uploader_ip, username)
+        'INSERT INTO files (token, stored_name, original_name, expires_at, uploader_ip, username, method) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (token, stored_name, original_name, expires_at, uploader_ip, username, 'API')
     )
     conn.commit()
     conn.close()
@@ -585,8 +621,7 @@ def swagger_spec():
                         "201": {"description": "File uploaded", "content": {"application/json": {"schema": {"type": "object", "properties": {"link": {"type": "string"}}}}}},
                         "400": {"description": "No file provided"},
                         "401": {"description": "Invalid or missing API key"},
-                        "500": {"description": "Internal server error"},
-                        "403": {"description": "IP Banned"}
+                        "413": {"description": "File exceeds size limit"}
                     }
                 }
             }

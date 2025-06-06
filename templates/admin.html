@@ -71,7 +71,7 @@
             <input type="hidden" name="action" value="reset_password" />
             <input type="hidden" name="username" value="{{ u }}" />
             <input type="password" name="password" placeholder="New Password" required />
-            <button type="submit">Reset PW</button>
+            <button type="submit">Reset Password</button>
           </form>
           {% if u != current_user %}
           <form method="post" style="display:inline">
@@ -86,8 +86,8 @@
   </table>
   <h2>File Administration</h2>
   <table>
-    <tr><th>Token</th><th>Filename</th><th>Size</th><th>Expires At</th><th>Uploader IP</th><th>User</th><th>Actions</th></tr>
-    {% for token,name,size,exp,ip,user in files %}
+    <tr><th>Token</th><th>Filename</th><th>Size</th><th>Expires At</th><th>Uploader IP</th><th>User</th><th>Method</th><th>Actions</th></tr>
+    {% for token,name,size,exp,ip,user,method in files %}
       <tr>
         <td>{{ token }}</td>
         <td>{{ name }}</td>
@@ -95,6 +95,7 @@
         <td>{{ exp }}</td>
         <td>{{ ip }}</td>
         <td>{{ user }}</td>
+        <td>{{ method }}</td>
         <td>
           <form method="post" style="display:inline">
             <input type="hidden" name="action" value="change_expiry" />
