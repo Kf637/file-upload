@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload | File Service</title>
+    <style>
+        body { background: #121212; color: #e0e0e0; font-family: Arial, sans-serif; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 50px auto; background: #1e1e1e; padding: 20px; border-radius: 8px; position: relative; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
+        h1 { margin: 0 0 20px; color: #90caf9; text-align: center; }
+        .admin-btn { position: absolute; top: 20px; right: 20px; background: #1e88e5; color: #e0e0e0; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; }
+        .admin-btn:hover { background: #1565c0; }
+        .logout-btn { position: absolute; top: 20px; left: 20px; background: #90caf9; color: #121212; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; }
+        .logout-btn:hover { background: #64b5f6; }
+        form { display: flex; flex-direction: column; }
+        label { margin-bottom: 8px; font-weight: bold; }
+        input[type="file"], select { background: #2e2e2e; border: 1px solid #444; border-radius: 4px; padding: 10px; color: #e0e0e0; margin-bottom: 15px; }
+        select { appearance: none; }
+        button.submit { background: #42a5f5; border: none; color: #000; padding: 12px; font-size: 1em; border-radius: 4px; cursor: pointer; transition: background 0.3s; }
+        button.submit:hover { background: #1e88e5; }
+        .error { color: #ef5350; margin-bottom: 15px; text-align: center; }
+        .flash-link { background: #2e2e2e; padding: 15px; border-radius: 4px; border: 1px solid #444; margin-top: 20px; }
+        .flash-link a { color: #42a5f5; word-break: break-all; text-decoration: none; }
+        .flash-link a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Logout button visible to all users -->
+        <button class="logout-btn" onclick="location.href='{{ url_for('logout') }}';">Logout</button>
+        {% if is_admin %}
+            <button class="admin-btn" onclick="location.href='{{ url_for('admin')}}';">Admin</button>
+        {% endif %}
+        <h1>Upload a File</h1>
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+        <form id="uploadForm" action="{{ url_for('upload_file') }}" method="post" enctype="multipart/form-data">
+            <label for="file">Choose file</label>
+            <input type="file" id="file" name="file" required />
+            <label for="expire">Expires in</label>
+            <select name="expire" id="expire">
+                <option value="1">1 day</option>
+                <option value="7" selected>7 days</option>
+                <option value="30">30 days</option>
+                <option value="INF">Never</option>
+            </select>
+            <button type="submit" class="submit">Upload</button>
+            <!-- progress bar -->
+            <progress id="uploadProgress" value="0" max="100" style="width:100%; display:none;"></progress>
+        </form>
+        <!-- upload progress -->
+        <div id="progress-container" style="display:none; margin-top:15px; text-align:center;">
+            <progress id="upload-progress" value="0" max="100" style="width:100%;"></progress>
+            <div id="upload-text" style="margin-top:5px;">0%</div>
+        </div>
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div class="flash-link">
+                    {% for link in messages %}
+                        <p>Download Link:</p>
+                        <a href="{{ link }}">{{ link }}</a>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+    </div>
+    <script>
+        // client-side role-based size limit
+        const userRole = "{{ user_role }}";
+        const fileInput = document.getElementById('file');
+        const form = document.getElementById('uploadForm');
+        const progressBar = document.getElementById('uploadProgress');
+        form.addEventListener('submit', function(e) {
+            // pre-upload file size check based on role
+            const file = fileInput.files[0];
+            if (file) {
+                if (userRole === 'Limited' && file.size > 10 * 1024 * 1024) {
+                    alert('File too large for Limited account (max 10MB)');
+                    return;
+                } else if (userRole === 'user' && file.size > 100 * 1024 * 1024) {
+                    alert('File too large for user account (max 100MB)');
+                    return;
+                }
+            }
+            e.preventDefault();
+            const formData = new FormData(form);
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', form.action);
+            // mark as AJAX so server returns JSON instead of flash redirect
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+            xhr.upload.onprogress = function(event) {
+                if (event.lengthComputable) {
+                    const percent = (event.loaded / event.total) * 100;
+                    progressBar.style.display = 'block';
+                    progressBar.value = percent;
+                }
+            };
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    // attempt to parse JSON link
+                    let data;
+                    try {
+                        data = JSON.parse(xhr.responseText);
+                    } catch (e) {
+                        alert('Upload successful, but failed to parse response.');
+                        return;
+                    }
+                    if (data.link) {
+                        // display download link
+                        const flashDiv = document.querySelector('.flash-link') || document.createElement('div');
+                        flashDiv.className = 'flash-link';
+                        flashDiv.innerHTML = `<p>Download Link:</p><a href="${data.link}">${data.link}</a>`;
+                        document.querySelector('.container').appendChild(flashDiv);
+                    } else {
+                        alert('Upload completed, no link received.');
+                    }
+                } else {
+                    alert('Upload failed');
+                }
+            };
+            xhr.send(formData);
+        });
+    </script>
+</body>
+</html>

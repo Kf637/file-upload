@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin Dashboard</title>
+  <style>
+    body { background: #121212; color: #e0e0e0; font-family: Arial, sans-serif; margin: 20px; }
+    h1, h2 { color: #64b5f6; }
+    a { color: #64b5f6; text-decoration: none; margin-right: 10px; }
+    a:hover { text-decoration: underline; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    th, td { border: 1px solid #333; padding: 8px; }
+    th { background: #1e1e1e; }
+    tr:nth-child(even) { background: #1e1e1e; }
+    tr:nth-child(odd) { background: #2e2e2e; }
+    form { display: inline; }
+    select, input, button { background: #2e2e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 4px; margin-right: 4px; }
+    button { background: #1e88e5; border: none; cursor: pointer; }
+    button:hover { background: #1565c0; }
+    input[type=password] { width: auto; }
+    .flash { background: #333; padding: 10px; margin-bottom: 20px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Admin Dashboard</h1>
+  <a href="{{ url_for('logout') }}">Logout</a>
+  <a href="{{ url_for('upload_file') }}">Return to Upload</a>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      <div class="flash">
+        {% for msg in messages %}
+          <p>{{ msg }}</p>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+  <h2>User Administration</h2>
+  <form method="post" action="{{ url_for('admin') }}" style="margin-bottom:20px;">
+    <input type="hidden" name="action" value="create_user" />
+    <input type="text" name="new_username" placeholder="Username" required />
+    <input type="password" name="new_password" placeholder="Password" required />
+    <select name="new_role">
+      <option value="Limited">Limited</option>
+      <option value="user">user</option>
+      <option value="admin">admin</option>
+    </select>
+    <button type="submit">Create User</button>
+  </form>
+  <table>
+    <tr><th>Username</th><th>Role</th><th>Last IP</th><th>Actions</th></tr>
+    {% for u,role,ip in users %}
+      <tr>
+        <td>{{ u }}</td>
+        <td>{{ role }}</td>
+        <td>{{ ip }}</td>
+        <td>
+          {% if u != current_user %}
+          <form method="post" style="display:inline">
+            <input type="hidden" name="action" value="change_role" />
+            <input type="hidden" name="username" value="{{ u }}" />
+            <select name="role">
+              <option value="Limited">Limited</option>
+              <option value="user">user</option>
+              <option value="admin">admin</option>
+            </select>
+            <button type="submit">Change Role</button>
+          </form>
+          {% endif %}
+          <form method="post" style="display:inline">
+            <input type="hidden" name="action" value="reset_password" />
+            <input type="hidden" name="username" value="{{ u }}" />
+            <input type="password" name="password" placeholder="New Password" required />
+            <button type="submit">Reset PW</button>
+          </form>
+          {% if u != current_user %}
+          <form method="post" style="display:inline">
+            <input type="hidden" name="action" value="delete_user" />
+            <input type="hidden" name="username" value="{{ u }}" />
+            <button type="submit">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+  <h2>File Administration</h2>
+  <table>
+    <tr><th>Token</th><th>Filename</th><th>Size</th><th>Expires At</th><th>Uploader IP</th><th>User</th><th>Actions</th></tr>
+    {% for token,name,size,exp,ip,user in files %}
+      <tr>
+        <td>{{ token }}</td>
+        <td>{{ name }}</td>
+        <td>{{ size }}</td>
+        <td>{{ exp }}</td>
+        <td>{{ ip }}</td>
+        <td>{{ user }}</td>
+        <td>
+          <form method="post" style="display:inline">
+            <input type="hidden" name="action" value="change_expiry" />
+            <input type="hidden" name="token" value="{{ token }}" />
+            <select name="expire">
+              <option value="1">1d</option>
+              <option value="7">7d</option>
+              <option value="30">30d</option>
+              <option value="INF">INF</option>
+            </select>
+            <button type="submit">Update</button>
+          </form>
+          <form method="post" style="display:inline">
+            <input type="hidden" name="action" value="delete_file" />
+            <input type="hidden" name="token" value="{{ token }}" />
+            <button type="submit">Delete</button>
+          </form>
+          <!-- SHA256 button -->
+          <form method="post" style="display:inline">
+             <input type="hidden" name="action" value="show_sha256" />
+             <input type="hidden" name="token" value="{{ token }}" />
+             <button type="submit">SHA256</button>
+          </form>
+          <a href="/download/{{ token }}/{{ name }}" target="_blank">Download</a>
+        </td>
+        </tr>
+    {% endfor %}
+  </table>
+  <h2>IP Banning</h2>
+  <!-- Ban a new IP -->
+  <form method="post" action="{{ url_for('admin') }}" style="margin-bottom:20px;">
+    <input type="hidden" name="action" value="ban_ip" />
+    <input type="text" name="ip" placeholder="IP to ban" required />
+    <button type="submit">Ban IP</button>
+  </form>
+  <!-- List of banned IPs -->
+  <table>
+    <tr><th>IP Address</th><th>Banned At</th><th>Actions</th></tr>
+    {% for ip, ts in banned_ips %}
+      <tr>
+        <td>{{ ip }}</td>
+        <td>{{ ts }}</td>
+        <td>
+          <form method="post" action="{{ url_for('admin') }}" style="display:inline;">
+            <input type="hidden" name="action" value="unban_ip" />
+            <input type="hidden" name="ip" value="{{ ip }}" />
+            <button type="submit">Unban</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+  <script>
+    // Poll /admin/check every 30 seconds
+    setInterval(() => {
+      fetch('{{ url_for("admin_check") }}')
+        .then(res => {
+          if (!res.ok) {
+            window.location.href = '{{ url_for("login") }}';
+          }
+          return res.json();
+        })
+        .then(data => {
+          if (!data.access) {
+            window.location.href = '{{ url_for("login") }}';
+          }
+        })
+        .catch(() => { window.location.href = '{{ url_for("login") }}'; });
+    }, 30000);
+  </script>
+</body>
+</html>
