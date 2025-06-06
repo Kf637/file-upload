@@ -49,22 +49,17 @@
             <!-- progress bar -->
             <progress id="uploadProgress" value="0" max="100" style="width:100%; display:none;"></progress>
         </form>
-        <!-- upload progress -->
-        <div id="progress-container" style="display:none; margin-top:15px; text-align:center;">
-            <progress id="upload-progress" value="0" max="100" style="width:100%;"></progress>
-            <div id="upload-text" style="margin-top:5px;">0%</div>
+        {% if api_key %}
+        <!-- display API key for logged-in user -->
+        <div style="margin-top:20px; text-align:center; color:#aaa;">
+            <p>Your API Key:</p>
+            <code id="api-key">{{ api_key }}</code>
+            <!-- Button to API docs/Swagger -->
+             <br>
+            <button onclick="location.href='/swagger';" style="background: #42a5f5; color: #121212; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; margin-top: 10px;">API Documentation</button>
         </div>
-        {% with messages = get_flashed_messages() %}
-            {% if messages %}
-                <div class="flash-link">
-                    {% for link in messages %}
-                        <p>Download Link:</p>
-                        <a href="{{ link }}">{{ link }}</a>
-                    {% endfor %}
-                </div>
-            {% endif %}
-        {% endwith %}
-    </div>
+        {% endif %}
+     </div>
     <script>
         // client-side role-based size limit
         const userRole = "{{ user_role }}";

@@ -7,7 +7,7 @@ from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 import re
 import threading
@@ -38,11 +38,16 @@ def get_user_db_connection():
     conn = sqlite3.connect(USERS_DB_PATH)
     # create users table with case-sensitive username and role column
     conn.execute(
-        'CREATE TABLE IF NOT EXISTS users (username TEXT COLLATE BINARY PRIMARY KEY, password TEXT, last_ip TEXT, role TEXT)'
+        'CREATE TABLE IF NOT EXISTS users (username TEXT COLLATE BINARY PRIMARY KEY, password TEXT, last_ip TEXT, role TEXT, api_key TEXT)'
     )
     # ensure role column exists
     try:
         conn.execute('ALTER TABLE users ADD COLUMN role TEXT')
+    except sqlite3.OperationalError:
+        pass
+    # ensure api_key column exists
+    try:
+        conn.execute('ALTER TABLE users ADD COLUMN api_key TEXT')
     except sqlite3.OperationalError:
         pass
     return conn
@@ -91,13 +96,21 @@ def generate_token(length=TOKEN_LENGTH):
 def upload_file():
     # require login
     if 'username' not in session:
+        # if AJAX call, return JSON error instead of HTML redirect
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'error': 'Not authenticated'}), 401
         return redirect(url_for('login'))
     # get user role
     conn_r = get_user_db_connection()
     row_r = conn_r.execute('SELECT role FROM users WHERE username = ?', (session['username'],)).fetchone()
     conn_r.close()
     role = row_r[0] if row_r else 'Limited'
-    if request.method == 'POST':
+    if 'username' not in session:
+        # if AJAX call, return JSON error instead of HTML redirect
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'error': 'Not authenticated'}), 401
+        return redirect(url_for('login'))
+    elif request.method == 'POST':
         # enforce max 10 active uploads for Limited users
         if role == 'Limited':
             conn_count = get_db_connection()
@@ -191,6 +204,12 @@ def login():
             session['username'] = username
             # record client IP
             conn.execute('UPDATE users SET last_ip = ? WHERE username = ?', (get_client_ip(), username))
+            # ensure user has an API key
+            cur2 = conn.execute('SELECT api_key FROM users WHERE username = ?', (username,))
+            api_row = cur2.fetchone()
+            if not api_row or not api_row[0]:
+                new_key = generate_token(32)
+                conn.execute('UPDATE users SET api_key = ? WHERE username = ?', (new_key, username))
             conn.commit()
             conn.close()
             return redirect(url_for('upload_file'))
@@ -228,9 +247,14 @@ def admin():
                 flash('Invalid role')
             else:
                 hashed = hashlib.sha256(p.encode()).hexdigest()
-                conn_u.execute('INSERT INTO users (username, password, role) VALUES (?, ?, ?)', (u, hashed, r))
+                # generate API key for new user
+                new_api_key = generate_token(32)
+                conn_u.execute(
+                    'INSERT INTO users (username, password, role, api_key) VALUES (?, ?, ?, ?)',
+                    (u, hashed, r, new_api_key)
+                )
                 conn_u.commit()
-                flash(f'User {u} created')
+                flash(f'User {u} created with API key: {new_api_key}')
         elif action == 'change_role':
             u = request.form.get('username')
             r = request.form.get('role')
@@ -329,7 +353,7 @@ def admin():
     conn_f = get_db_connection()
     files_records = conn_f.execute('SELECT token, stored_name, original_name, expires_at, uploader_ip, username FROM files').fetchall()
     conn_f.close()
-    # format file entries with human-readable size and expiration
+    # format file entries with human-readable size and expiration (show in GMT+2)
     def human_size(num):
         for unit in ['B','KB','MB','GB','TB']:
             if num < 1024.0:
@@ -345,11 +369,13 @@ def admin():
             size_str = human_size(size)
         except OSError:
             size_str = 'N/A'
-        # format expiry
+        # format expiry in GMT+2
         if expires_at:
             try:
                 dt = datetime.fromisoformat(expires_at)
-                exp_str = dt.strftime('%d-%m-%Y %H:%M')
+                # interpret as UTC and convert to GMT+2
+                dt = dt.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=2)))
+                exp_str = dt.strftime('%d-%m-%Y %H:%M GMT+2')
             except Exception:
                 exp_str = expires_at
         else:
@@ -359,12 +385,14 @@ def admin():
     conn_b = get_banned_db_connection()
     b_rows = conn_b.execute('SELECT ip, banned_at FROM banned_ips').fetchall()
     conn_b.close()
-    # format banned timestamps
+    # format banned timestamps in GMT+2
     banned = []
     for ip, ban_ts in b_rows:
         try:
             dt = datetime.fromisoformat(ban_ts)
-            ts = dt.strftime('%d-%m-%Y %H:%M')
+            # interpret as UTC and convert to GMT+2
+            dt = dt.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=2)))
+            ts = dt.strftime('%d-%m-%Y %H:%M GMT+2')
         except Exception:
             ts = ban_ts
         banned.append((ip, ts))
@@ -417,23 +445,66 @@ def ban_ip_remove():
     flash(f'IP {ip_to_unban} unbanned')
     return redirect(url_for('admin'))
 
+# Requre API key for upload endpoint
+@app.route('/api/upload', methods=['POST'])
+@limiter.limit("10 per minute", key_func=lambda: request.headers.get('X-API-Key') or request.args.get('X-API-Key'))
+def API_upload():
+    # require API key in header or query
+    api_key = request.headers.get('X-API-Key') or request.args.get('X-API-Key')
+    if not api_key:
+        return jsonify({'error': 'API key required'}), 401
+    # validate API key
+    conn_u = get_user_db_connection()
+    row = conn_u.execute('SELECT username FROM users WHERE api_key = ?', (api_key,)).fetchone()
+    conn_u.close()
+    if not row:
+        return jsonify({'error': 'Invalid API key'}), 401
+    username = row[0]
+    # require multipart upload
+    file = request.files.get('file')
+    if not file or not file.filename:
+        return jsonify({'error': 'No file provided'}), 400
+    original_name = secure_filename(file.filename)
+    token = generate_token()
+    stored_name = f"{token}_{original_name}"
+    save_path = os.path.join(UPLOAD_FOLDER, stored_name)
+    file.save(save_path)
+    # always expire in 7 days
+    expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
+    # record in database
+    uploader_ip = get_client_ip()
+    conn = get_db_connection()
+    conn.execute(
+        'INSERT INTO files (token, stored_name, original_name, expires_at, uploader_ip, username) VALUES (?, ?, ?, ?, ?, ?)',
+        (token, stored_name, original_name, expires_at, uploader_ip, username)
+    )
+    conn.commit()
+    conn.close()
+    # return JSON link
+    link = request.url_root.rstrip('/') + f"/download/{token}/{original_name}"
+    return jsonify({'link': link}), 201
 
 @app.context_processor
 def inject_user():
-    # provide is_admin flag to templates
+    # provide is_admin, user_role, and api_key to templates
     is_admin = False
     user_role = None
+    api_key = None
     username = session.get('username')
     if username:
         conn = get_user_db_connection()
-        row = conn.execute('SELECT role FROM users WHERE username = ?', (username,)).fetchone()
+        # get role
+        row_role = conn.execute('SELECT role FROM users WHERE username = ?', (username,)).fetchone()
+        # get api_key
+        row_api = conn.execute('SELECT api_key FROM users WHERE username = ?', (username,)).fetchone()
         conn.close()
-        if row:
-            role = row[0]
-            user_role = role
-            if role == 'admin':
+        if row_role:
+            user_role = row_role[0]
+            if user_role == 'admin':
                 is_admin = True
-    return dict(is_admin=is_admin, user_role=user_role)
+        if row_api:
+            api_key = row_api[0]
+    return dict(is_admin=is_admin, user_role=user_role, api_key=api_key)
 
 def cleanup_worker():
     """Periodically clean up expired entries and missing files every 5 minutes."""
@@ -473,6 +544,54 @@ def block_banned_ip():
     row = conn.execute('SELECT ip FROM banned_ips WHERE ip = ?', (ip,)).fetchone()
     conn.close()
     if row:
+        # API endpoints should return JSON error
+        if request.path.startswith('/api/'):
+            return jsonify({'error': 'Your IP has been banned'}), 403
         return 'Your IP has been banned.', 403
+
+# Swagger UI and spec endpoints
+@app.route('/docs')
+def swagger_ui():
+    return render_template('swagger.html')
+@app.route('/swagger')
+def swagger_alias():
+    return redirect(url_for('swagger_ui'))
+
+@app.route('/swagger.json')
+def swagger_spec():
+    spec = {
+        "openapi": "3.0.0",
+        "info": {"title": "File Upload API", "version": "1.0.0"},
+        "paths": {
+            "/api/upload": {
+                "post": {
+                    "summary": "Upload a file",
+                    "parameters": [
+                        {"name": "X-API-Key", "in": "header", "required": True, "schema": {"type": "string"}}
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "multipart/form-data": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {"file": {"type": "string", "format": "binary"}},
+                                    "required": ["file"]
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "201": {"description": "File uploaded", "content": {"application/json": {"schema": {"type": "object", "properties": {"link": {"type": "string"}}}}}},
+                        "400": {"description": "No file provided"},
+                        "401": {"description": "Invalid or missing API key"},
+                        "500": {"description": "Internal server error"},
+                        "403": {"description": "IP Banned"}
+                    }
+                }
+            }
+        }
+    }
+    return jsonify(spec)
 
 # Note: use gunicorn (`gunicorn app:app`) to serve this app in production, do not use Flask's dev server
