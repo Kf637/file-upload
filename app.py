@@ -20,7 +20,7 @@ UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 DB_PATH = os.path.join(BASE_DIR, 'file_tokens.db')
 USERS_DB_PATH = os.path.join(BASE_DIR, 'users.db')
 BANNED_DB_PATH = os.path.join(BASE_DIR, 'banned_ips.db')
-TOKEN_LENGTH = 24
+TOKEN_LENGTH = 34
 # Ensure upload directory exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -95,7 +95,15 @@ def get_db_connection():
 # Generate a random token
 def generate_token(length=TOKEN_LENGTH):
     chars = string.ascii_letters + string.digits
-    return ''.join(random.choice(chars) for _ in range(length))
+    conn = get_db_connection()
+    try:
+        while True:
+            token = ''.join(random.choice(chars) for _ in range(length))
+            exists = conn.execute('SELECT 1 FROM files WHERE token = ?', (token,)).fetchone()
+            if not exists:
+                return token
+    finally:
+        conn.close()
 
 @app.route('/', methods=['GET', 'POST'])
 @limiter.limit("10 per 1 minutes")
@@ -520,6 +528,57 @@ def API_upload():
     link = request.url_root.rstrip('/') + f"/download/{token}/{original_name}"
     return jsonify({'link': link}), 201
 
+@app.route('/api/public_upload', methods=['POST'])
+# limit public uploads to 5 per IP per day (before reading body)
+@limiter.limit("5 per day")
+def API_public_upload():
+    # Public upload endpoint without API key, with a 5MB limit and 1 day expiration
+    ip = get_client_ip()
+    # reject large bodies early
+    content_length = request.content_length
+    if content_length is not None and content_length > 5 * 1024 * 1024:
+        return jsonify({'error': 'File too large for public upload (max 5MB)'}), 413
+    conn = get_db_connection()
+    # count recent public uploads for this IP within last day
+    rows = conn.execute("SELECT expires_at FROM files WHERE uploader_ip = ? AND method = 'Public'", (ip,)).fetchall()
+    recent_count = 0
+    for (exp,) in rows:
+        if exp:
+            try:
+                if datetime.fromisoformat(exp) > datetime.utcnow():
+                    recent_count += 1
+            except Exception:
+                pass
+    if recent_count >= 5:
+        conn.close()
+        return jsonify({'error': 'Public uploads limited to 5 per day'}), 429
+    file = request.files.get('file')
+    if not file or not file.filename:
+        conn.close()
+        return jsonify({'error': 'No file provided'}), 400
+    original_name = secure_filename(file.filename)
+    token = generate_token()
+    stored_name = f"{token}_{original_name}"
+    save_path = os.path.join(UPLOAD_FOLDER, stored_name)
+    file.save(save_path)
+    # enforce public size limit
+    size = os.path.getsize(save_path)
+    if size > 5 * 1024 * 1024:
+        os.remove(save_path)
+        conn.close()
+        return jsonify({'error': 'File too large for public upload (max 5MB)'}), 413
+    expires_at = (datetime.utcnow() + timedelta(days=1)).isoformat()
+    # insert record
+    # use Public API for username since public uploads don't have one
+    conn.execute(
+        'INSERT INTO files (token, stored_name, original_name, expires_at, uploader_ip, username, method) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (token, stored_name, original_name, expires_at, ip, 'Public API', 'API')
+    )
+    conn.commit()
+    conn.close()
+    link = request.url_root.rstrip('/') + f"/download/{token}/{original_name}"
+    return jsonify({'link': link}), 201
+
 @app.context_processor
 def inject_user():
     # provide is_admin, user_role, and api_key to templates
@@ -546,6 +605,19 @@ def cleanup_worker():
     """Periodically clean up expired entries and missing files every 5 minutes."""
     while True:
         conn = get_db_connection()
+        # remove orphaned files: files without a matching token in DB
+        tokens = set(r[0] for r in conn.execute('SELECT token FROM files').fetchall())
+        for fname in os.listdir(UPLOAD_FOLDER):
+            fpath = os.path.join(UPLOAD_FOLDER, fname)
+            if not os.path.isfile(fpath):
+                continue
+            token = fname.split('_', 1)[0]
+            if token not in tokens:
+                try:
+                    os.remove(fpath)
+                except OSError:
+                    pass
+        # now clean up DB-driven files
         rows = conn.execute('SELECT token, stored_name, expires_at FROM files').fetchall()
         for token, stored_name, expires_at in rows:
             path = os.path.join(UPLOAD_FOLDER, stored_name)
@@ -622,6 +694,29 @@ def swagger_spec():
                         "400": {"description": "No file provided"},
                         "401": {"description": "Invalid or missing API key"},
                         "413": {"description": "File exceeds size limit"}
+                    }
+                }
+            },
+            "/api/public_upload": {
+                "post": {
+                    "summary": "Public upload without API key limited to 5MB",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "multipart/form-data": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {"file": {"type": "string", "format": "binary"}},
+                                    "required": ["file"]
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "201": {"description": "File uploaded", "content": {"application/json": {"schema": {"type": "object", "properties": {"link": {"type": "string"}}}}}},
+                        "400": {"description": "No file provided"},
+                        "413": {"description": "File exceeds size limit"},
+                        "429": {"description": "Public upload rate limit exceeded"}
                     }
                 }
             }
