@@ -1,5 +1,7 @@
 Flask
 Flask-Limiter
+flask_wtf
+flask_talisman
 gunicorn  # optional; on Windows, use waitress instead
 waitress
 ipaddress
