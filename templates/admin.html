@@ -37,6 +37,7 @@
   {% endwith %}
   <h2>User Administration</h2>
   <form method="post" action="{{ url_for('admin') }}" style="margin-bottom:20px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
     <input type="hidden" name="action" value="create_user" />
     <input type="text" name="new_username" placeholder="Username" required />
     <input type="password" name="new_password" placeholder="Password" required />
@@ -57,6 +58,7 @@
         <td>
           {% if u != current_user %}
           <form method="post" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
             <input type="hidden" name="action" value="change_role" />
             <input type="hidden" name="username" value="{{ u }}" />
             <select name="role">
@@ -68,6 +70,7 @@
           </form>
           {% endif %}
           <form method="post" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
             <input type="hidden" name="action" value="reset_password" />
             <input type="hidden" name="username" value="{{ u }}" />
             <input type="password" name="password" placeholder="New Password" required />
@@ -75,6 +78,7 @@
           </form>
           {% if u != current_user %}
           <form method="post" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
             <input type="hidden" name="action" value="delete_user" />
             <input type="hidden" name="username" value="{{ u }}" />
             <button type="submit">Delete</button>
@@ -98,6 +102,7 @@
         <td>{{ method }}</td>
         <td>
           <form method="post" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
             <input type="hidden" name="action" value="change_expiry" />
             <input type="hidden" name="token" value="{{ token }}" />
             <select name="expire">
@@ -109,12 +114,14 @@
             <button type="submit">Update</button>
           </form>
           <form method="post" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
             <input type="hidden" name="action" value="delete_file" />
             <input type="hidden" name="token" value="{{ token }}" />
             <button type="submit">Delete</button>
           </form>
           <!-- SHA256 button -->
           <form method="post" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
              <input type="hidden" name="action" value="show_sha256" />
              <input type="hidden" name="token" value="{{ token }}" />
              <button type="submit">SHA256</button>
@@ -127,6 +134,7 @@
   <h2>IP Banning</h2>
   <!-- Ban a new IP -->
   <form method="post" action="{{ url_for('admin') }}" style="margin-bottom:20px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
     <input type="hidden" name="action" value="ban_ip" />
     <input type="text" name="ip" placeholder="IP to ban" required />
     <button type="submit">Ban IP</button>
@@ -140,6 +148,7 @@
         <td>{{ ts }}</td>
         <td>
           <form method="post" action="{{ url_for('admin') }}" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
             <input type="hidden" name="action" value="unban_ip" />
             <input type="hidden" name="ip" value="{{ ip }}" />
             <button type="submit">Unban</button>

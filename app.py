@@ -3,6 +3,8 @@ import sqlite3
 import random
 import string
 from flask import Flask, request, render_template, send_from_directory, abort, redirect, url_for, flash, session, jsonify
+from flask_wtf.csrf import CSRFProtect
+from flask_talisman import Talisman
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 from flask_limiter import Limiter
@@ -13,6 +15,7 @@ import re
 import threading
 import time
 import ipaddress
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +31,40 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Strict'
+)
+# Trust proxy headers for correct scheme detection
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+# Enable CSRF protection
+csrf = CSRFProtect(app)
+# Security headers via Talisman
+csp = {
+    'default-src': ["'self'"],
+    'script-src': ["'self'", "'unsafe-inline'", "https://unpkg.com"],  # allow inline scripts and Swagger assets
+    'style-src': ["'self'", "'unsafe-inline'", "https://unpkg.com"],  # allow inline CSS and Swagger assets
+    'img-src': ["'self'", 'data:'],
+    'frame-ancestors': ["'none'"]
+}
+Talisman(
+    app,
+    content_security_policy=csp,
+    force_https=False,  # disable internal redirects behind proxy
+    strict_transport_security=True,
+    strict_transport_security_max_age=31536000,
+    strict_transport_security_preload=True,
+    frame_options='DENY'
+)
+
+@app.after_request
+def set_extra_security_headers(response):
+    # Add COOP and COEP headers not supported by this Talisman version
+    response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
+    response.headers['Cross-Origin-Embedder-Policy'] = 'require-corp'
+    return response
+
 # Configure rate limiter storage to avoid in-memory warning
 app.config['RATELIMIT_STORAGE_URI'] = 'memory://'
 # helper to use Cloudflare header for rate limiting
@@ -494,6 +531,7 @@ def ban_ip_remove():
 
 # Requre API key for upload endpoint
 @app.route('/api/upload', methods=['POST'])
+@csrf.exempt
 @limiter.limit("10 per minute", key_func=lambda: request.headers.get('X-API-Key') or request.args.get('X-API-Key'))
 def API_upload():
     # require API key in header or query
@@ -550,6 +588,7 @@ def API_upload():
     return jsonify({'link': link}), 201
 
 @app.route('/api/public_upload', methods=['POST'])
+@csrf.exempt
 # limit public uploads to 5 per IP per day (before reading body)
 @limiter.limit("5 per day")
 def API_public_upload():

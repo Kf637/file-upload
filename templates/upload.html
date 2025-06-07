@@ -27,15 +27,16 @@
 <body>
     <div class="container">
         <!-- Logout button visible to all users -->
-        <button class="logout-btn" onclick="location.href='{{ url_for('logout') }}';">Logout</button>
+        <a class="logout-btn" href="{{ url_for('logout') }}">Logout</a>
         {% if is_admin %}
-            <button class="admin-btn" onclick="location.href='{{ url_for('admin')}}';">Admin</button>
+            <a class="admin-btn" href="{{ url_for('admin') }}">Admin</a>
         {% endif %}
         <h1>Upload a File</h1>
-        {% if error %}
-            <div class="error">{{ error }}</div>
-        {% endif %}
+         {% if error %}
+             <div class="error">{{ error }}</div>
+         {% endif %}
         <form id="uploadForm" action="{{ url_for('upload_file') }}" method="post" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
             <label for="file">Choose file</label>
             <input type="file" id="file" name="file" required />
             <label for="expire">Expires in</label>
@@ -49,6 +50,13 @@
             <!-- progress bar -->
             <progress id="uploadProgress" value="0" max="100" style="width:100%; display:none;"></progress>
         </form>
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                {% for msg in messages %}
+                    <div class="flash-link"><p>Download Link:</p><a href="{{ msg }}">{{ msg }}</a></div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
         {% if api_key %}
         <!-- display API key for logged-in user -->
         <div style="margin-top:20px; text-align:center; color:#aaa;">
@@ -56,7 +64,7 @@
             <code id="api-key">{{ api_key }}</code>
             <!-- Button to API docs/Swagger -->
              <br>
-            <button onclick="location.href='/swagger';" style="background: #42a5f5; color: #121212; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; margin-top: 10px;">API Documentation</button>
+            <a href="{{ url_for('swagger_alias') }}" style="background: #42a5f5; color: #121212; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; margin-top: 10px; display: inline-block; text-align: center;">API Documentation</a>
         </div>
         {% endif %}
      </div>
