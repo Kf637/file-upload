@@ -20,6 +20,7 @@ UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 DB_PATH = os.path.join(BASE_DIR, 'file_tokens.db')
 USERS_DB_PATH = os.path.join(BASE_DIR, 'users.db')
 BANNED_DB_PATH = os.path.join(BASE_DIR, 'banned_ips.db')
+FILE_LOGS = os.path.join(BASE_DIR, 'file_logs.log')
 TOKEN_LENGTH = 34
 # Ensure upload directory exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -170,6 +171,16 @@ def upload_file():
         )
         conn.commit()
         conn.close()
+        # Log upload
+        try:
+            ts = datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=2))).strftime('%d-%m-%Y %H:%M GMT+2')
+            with open(save_path, 'rb') as f:
+                sha256 = hashlib.sha256(f.read()).hexdigest()
+            size = os.path.getsize(save_path)
+            with open(FILE_LOGS, 'a') as log_f:
+                log_f.write(f"Upload Date: {ts} | Uploader IP: {uploader_ip} | File Name: {original_name} | SHA256: {sha256} | Size: {size} bytes\n")
+        except Exception:
+            pass
         # generate one-time download link
         link = request.url_root.rstrip('/') + f"/download/{token}/{original_name}"
         # if AJAX request, return JSON with link
@@ -524,6 +535,16 @@ def API_upload():
     )
     conn.commit()
     conn.close()
+    # Log upload
+    try:
+        ts = datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=2))).strftime('%d-%m-%Y %H:%M GMT+2')
+        with open(save_path, 'rb') as f:
+            sha256 = hashlib.sha256(f.read()).hexdigest()
+        size = os.path.getsize(save_path)
+        with open(FILE_LOGS, 'a') as log_f:
+            log_f.write(f"Upload Date: {ts} | Uploader IP: {uploader_ip} | File Name: {original_name} | SHA256: {sha256} | Size: {size} bytes\n")
+    except Exception:
+        pass
     # return JSON link
     link = request.url_root.rstrip('/') + f"/download/{token}/{original_name}"
     return jsonify({'link': link}), 201
@@ -576,6 +597,16 @@ def API_public_upload():
     )
     conn.commit()
     conn.close()
+    # Log upload for public API
+    try:
+        ts = datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=2))).strftime('%d-%m-%Y %H:%M GMT+2')
+        with open(save_path, 'rb') as f:
+            sha256 = hashlib.sha256(f.read()).hexdigest()
+        size = os.path.getsize(save_path)
+        with open(FILE_LOGS, 'a') as log_f:
+            log_f.write(f"Upload Date: {ts} | Uploader IP: {ip} | File Name: {original_name} | SHA256: {sha256} | Size: {size} bytes\n")
+    except Exception:
+        pass
     link = request.url_root.rstrip('/') + f"/download/{token}/{original_name}"
     return jsonify({'link': link}), 201
 
