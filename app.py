@@ -16,25 +16,35 @@ import threading
 import time
 import ipaddress
 from werkzeug.middleware.proxy_fix import ProxyFix
+from dotenv import load_dotenv
+
+# Load environment variables from .env in project root
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
-DB_PATH = os.path.join(BASE_DIR, 'file_tokens.db')
-USERS_DB_PATH = os.path.join(BASE_DIR, 'users.db')
-BANNED_DB_PATH = os.path.join(BASE_DIR, 'banned_ips.db')
-FILE_LOGS = os.path.join(BASE_DIR, 'file_logs.log')
-TOKEN_LENGTH = 34
+UPLOAD_FOLDER = os.path.join(BASE_DIR, os.getenv('UPLOAD_FOLDER', 'uploads'))
+DB_PATH = os.path.join(BASE_DIR, os.getenv('DB_PATH', 'file_tokens.db'))
+USERS_DB_PATH = os.path.join(BASE_DIR, os.getenv('USERS_DB_PATH', 'users.db'))
+BANNED_DB_PATH = os.path.join(BASE_DIR, os.getenv('BANNED_DB_PATH', 'banned_ips.db'))
+FILE_LOGS = os.path.join(BASE_DIR, os.getenv('FILE_LOGS', 'file_logs.log'))
+TOKEN_LENGTH = int(os.getenv('TOKEN_LENGTH', '34'))
 # Ensure upload directory exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Initialize Flask app
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+# Choose random SECRET_KEY from SECRET_KEYS list and derive secret key
+secret_list = os.getenv('SECRET_KEYS', '').split(',')
+if not secret_list or all(not s for s in secret_list):
+    raise RuntimeError("No SECRET_KEYS configured")
+seed = random.choice(secret_list)
+rng = random.Random(seed)
+app.secret_key = rng.randbytes(24)
 app.config.update(
-    SESSION_COOKIE_SECURE=True,
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Strict'
+    SESSION_COOKIE_SECURE=os.getenv('SESSION_COOKIE_SECURE', 'True') == 'True',
+    SESSION_COOKIE_HTTPONLY=os.getenv('SESSION_COOKIE_HTTPONLY', 'True') == 'True',
+    SESSION_COOKIE_SAMESITE=os.getenv('SESSION_COOKIE_SAMESITE', 'Strict')
 )
 # Trust proxy headers for correct scheme detection
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
@@ -51,9 +61,9 @@ csp = {
 Talisman(
     app,
     content_security_policy=csp,
-    force_https=False,  # disable internal redirects behind proxy
+    force_https=os.getenv('TALISMAN_FORCE_HTTPS', 'False') == 'True',
     strict_transport_security=True,
-    strict_transport_security_max_age=31536000,
+    strict_transport_security_max_age=int(os.getenv('TALISMAN_STRICT_SEC_MAX_AGE', '31536000')),
     strict_transport_security_preload=True,
     frame_options='DENY'
 )
@@ -66,7 +76,7 @@ def set_extra_security_headers(response):
     return response
 
 # Configure rate limiter storage to avoid in-memory warning
-app.config['RATELIMIT_STORAGE_URI'] = 'memory://'
+app.config['RATELIMIT_STORAGE_URI'] = os.getenv('RATELIMIT_STORAGE_URI', 'memory://')
 # helper to use Cloudflare header for rate limiting
 def get_client_ip():
     return request.headers.get('CF-Connecting-IP') or request.remote_addr
@@ -530,7 +540,7 @@ def ban_ip_remove():
     return redirect(url_for('admin'))
 
 # Requre API key for upload endpoint
-@app.route('/api/upload', methods=['POST'])
+@app.route('/api/v1/upload', methods=['POST'])
 @csrf.exempt
 @limiter.limit("10 per minute", key_func=lambda: request.headers.get('X-API-Key') or request.args.get('X-API-Key'))
 def API_upload():
@@ -587,7 +597,7 @@ def API_upload():
     link = request.url_root.rstrip('/') + f"/download/{token}/{original_name}"
     return jsonify({'link': link}), 201
 
-@app.route('/api/public_upload', methods=['POST'])
+@app.route('/api/v1/public_upload', methods=['POST'])
 @csrf.exempt
 # limit public uploads to 5 per IP per day (before reading body)
 @limiter.limit("5 per day")
@@ -741,7 +751,7 @@ def swagger_spec():
         "openapi": "3.0.0",
         "info": {"title": "File Upload API", "version": "1.0.0"},
         "paths": {
-            "/api/upload": {
+            "/api/v1/upload": {
                 "post": {
                     "summary": "Upload a file",
                     "parameters": [
@@ -767,7 +777,7 @@ def swagger_spec():
                     }
                 }
             },
-            "/api/public_upload": {
+            "/api/v1/public_upload": {
                 "post": {
                     "summary": "Public upload without API key limited to 5MB",
                     "requestBody": {
