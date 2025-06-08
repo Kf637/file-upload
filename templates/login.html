@@ -72,6 +72,7 @@
     {% endwith %}
 
     <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
         <input type="text" name="username" placeholder="Username" required />
         <input type="password" name="password" placeholder="Password" required />
         <button type="submit">Login</button>
@@ -89,5 +90,9 @@
       API Documentation
     </button>
     <footer>Contact the Administrator for an account.</footer>
+    <footer>
+        <p>Administrator Contact: <a href="mailto:file@domain.com">file@domain.com</a></p>
+        <p>Abuse Contact: <a href="mailto:abuse@domain.com">abuse@domain.com</a></p
+    </footer>
 </body>
 </html>
