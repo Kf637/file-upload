@@ -659,6 +659,15 @@ def API_public_upload():
     link = request.url_root.rstrip('/') + f"/download/{token}/{original_name}"
     return jsonify({'link': link}), 201
 
+@app.route('/api/v1/status', methods=['GET'])
+@csrf.exempt
+@limiter.limit("100 per 5 minutes")
+def API_status():
+    # API endpoint to check service status
+    return jsonify({
+        'status': 'ok'
+    }), 200
+
 @app.context_processor
 def inject_user():
     # provide is_admin, user_role, and api_key to templates
@@ -797,6 +806,15 @@ def swagger_spec():
                         "400": {"description": "No file provided"},
                         "413": {"description": "File exceeds size limit"},
                         "429": {"description": "Public upload rate limit exceeded"}
+                    }
+                }
+            },
+            "/api/v1/status": {
+                "get": {
+                    "summary": "Service status",
+                    "responses": {
+                        "200": {"description": "Service is running", "content": {"application/json": {"schema": {"type": "object", "properties": {"status": {"type": "string"}}}}}},
+                        "429": {"description": "Too many requests"}
                     }
                 }
             }
