@@ -200,17 +200,22 @@ def upload_file():
         elif size > 100 * 1024 * 1024:
             os.remove(save_path)
             return render_template('upload.html', error='File too large (max 100MB)')
-        # determine expiration: Limited users get max 1 day; others choose days or infinite
-        expire_option = request.form.get('expire')
+        # determine expiration: normalize input and handle 'Never'
+        expire_option = (request.form.get('expire') or '').upper()
         if role == 'Limited':
-            # Limited accounts only get 1-day storage
-            expires_at = (datetime.utcnow() + timedelta(days=1)).isoformat()
+            # Limited accounts always get 1-day storage
+            expires_dt = datetime.utcnow() + timedelta(days=1)
         else:
             if expire_option == 'INF':
-                expires_at = None
+                expires_dt = None
             else:
-                # expire_option is number of days
-                expires_at = (datetime.utcnow() + timedelta(days=int(expire_option))).isoformat()
+                try:
+                    days = int(expire_option)
+                    expires_dt = datetime.utcnow() + timedelta(days=days)
+                except (TypeError, ValueError):
+                    # invalid input, treat as infinite
+                    expires_dt = None
+        expires_at = expires_dt.isoformat() if expires_dt else None
         # Insert record into DB with expiration, uploader IP and user
         uploader_ip = get_client_ip()
         user = session['username']
@@ -412,11 +417,15 @@ def admin():
         # No SQL injection: tokens validated by DB parameterization
         if action == 'change_expiry':
             t = request.form.get('token')
-            exp_option = request.form.get('expire')
+            exp_option = (request.form.get('expire') or '').upper()
             if exp_option == 'INF':
                 new_exp = None
             else:
-                new_exp = (datetime.utcnow() + timedelta(days=int(exp_option))).isoformat()
+                try:
+                    days = int(exp_option)
+                    new_exp = (datetime.utcnow() + timedelta(days=days)).isoformat()
+                except (TypeError, ValueError):
+                    new_exp = None
             conn_f.execute('UPDATE files SET expires_at = ? WHERE token = ?', (new_exp, t))
             conn_f.commit()
             flash(f'Expiry for {t} updated')
@@ -575,8 +584,16 @@ def API_upload():
     elif size > 100 * 1024 * 1024:
         os.remove(save_path)
         return jsonify({'error': 'File too large (max 100MB)'}), 413
-    # always expire in 7 days
-    expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
+    # respect optional form parameter 'expire', default to 7 days, allow 'INF' for never
+    expire_option = (request.form.get('expire') or '').upper()
+    if expire_option == 'INF':
+        expires_dt = None
+    else:
+        try:
+            expires_dt = datetime.utcnow() + timedelta(days=int(expire_option))
+        except (TypeError, ValueError):
+            expires_dt = datetime.utcnow() + timedelta(days=7)
+    expires_at = expires_dt.isoformat() if expires_dt else None
     # record in database
     uploader_ip = get_client_ip()
     conn = get_db_connection()
