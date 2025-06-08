@@ -2,7 +2,7 @@ import os
 import sqlite3
 import random
 import string
-from flask import Flask, request, render_template, send_from_directory, abort, redirect, url_for, flash, session, jsonify
+from flask import Flask, request, render_template, send_file, abort, redirect, url_for, flash, session, jsonify
 from flask_wtf.csrf import CSRFProtect
 from flask_talisman import Talisman
 from werkzeug.utils import secure_filename
@@ -18,9 +18,22 @@ import ipaddress
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 import secrets
+import logging
 
 # Load environment variables from .env in project root
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+
+# configure logging
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+    handlers=[
+        logging.FileHandler(os.getenv('LOG_FILE', 'app.log')),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -76,13 +89,24 @@ def set_extra_security_headers(response):
     # Add COOP and COEP headers not supported by this Talisman version
     response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
     response.headers['Cross-Origin-Embedder-Policy'] = 'require-corp'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Cache-Control'] = 'no-store'
     return response
 
 # Configure rate limiter storage to avoid in-memory warning
 app.config['RATELIMIT_STORAGE_URI'] = os.getenv('RATELIMIT_STORAGE_URI', 'memory://')
 # helper to use Cloudflare header for rate limiting
 def get_client_ip():
-    return request.headers.get('CF-Connecting-IP') or request.remote_addr
+    # Only accept requests forwarded via Cloudflare Tunnel on localhost
+    if request.remote_addr != '127.0.0.1':
+        logger.warning(f"Rejected non-tunnel request from {request.remote_addr}")
+        abort(403)
+    # Use Cloudflare header for real client IP
+    cf_ip = request.headers.get('CF-Connecting-IP')
+    if not cf_ip:
+        logger.warning("Missing CF-Connecting-IP header on tunnel request")
+        abort(400)
+    return cf_ip
 # initialize rate limiter without defaults; apply per-route limits using CF-Connecting-IP
 limiter = Limiter(key_func=get_client_ip, default_limits=[], app=app)
 
@@ -184,6 +208,7 @@ def upload_file():
             if count >= 10:
                 return render_template('upload.html', error='Limited accounts can have at most 10 active uploads')
         uploaded = request.files.get('file')
+        logger.info(f"Web upload attempt: user={session.get('username')} ip={get_client_ip()} filename={uploaded.filename if uploaded else None}")
         if not uploaded or uploaded.filename == '':
             return render_template('upload.html', error='No file selected')
         original_name = secure_filename(uploaded.filename)
@@ -191,6 +216,8 @@ def upload_file():
         stored_name = f"{token}_{original_name}"
         save_path = os.path.join(UPLOAD_FOLDER, stored_name)
         uploaded.save(save_path)
+        # ensure uploaded files are not executable
+        os.chmod(save_path, 0o600)
         # enforce role-based size limit
         size = os.path.getsize(save_path)
         # enforce 10MB for Limited users, 100MB for others
@@ -224,6 +251,7 @@ def upload_file():
             'INSERT INTO files (token, stored_name, original_name, expires_at, uploader_ip, username, method) VALUES (?, ?, ?, ?, ?, ?, ?)',
             (token, stored_name, original_name, expires_at, uploader_ip, user, 'Webpage')
         )
+        logger.info(f"Web upload saved: token={token} user={user} file={original_name} path={save_path}")
         conn.commit()
         conn.close()
         # Log upload
@@ -242,6 +270,7 @@ def upload_file():
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({'link': link})
         # otherwise flash and redirect to clear form
+        logger.info(f"Web upload link generated: {link}")
         flash(link)
         return redirect(url_for('upload_file'))
     return render_template('upload.html')
@@ -250,6 +279,7 @@ def upload_file():
 @limiter.limit("20 per 2 minutes")
 def download(token, filename):
     conn = get_db_connection()
+    logger.info(f"Download request: token={token} filename={filename} ip={get_client_ip()}")
     cur = conn.execute(
         'SELECT stored_name, original_name, expires_at FROM files WHERE token = ?', (token,)
     )
@@ -272,7 +302,18 @@ def download(token, filename):
             conn2.commit()
             conn2.close()
             abort(404)
-    return send_from_directory(UPLOAD_FOLDER, stored_name, as_attachment=True, download_name=original_name)
+    # stream file as raw binary to ensure exact content
+    # prevent directory traversal
+    base_dir = os.path.abspath(UPLOAD_FOLDER)
+    file_path = os.path.abspath(os.path.join(base_dir, stored_name))
+    if not file_path.startswith(base_dir + os.sep):
+        abort(404)
+    logger.info(f"Download serving file: {file_path}")
+    return send_file(file_path,
+                     mimetype='application/octet-stream',
+                     as_attachment=True,
+                     download_name=original_name,
+                     conditional=False)
 
 # Login routes
 @app.route('/login', methods=['GET', 'POST'])
@@ -281,6 +322,7 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username').lower()
         password = request.form.get('password')
+        logger.info(f"Login attempt: username={username} ip={get_client_ip()}")
         hashed = hashlib.sha256(password.encode()).hexdigest()
         conn = get_user_db_connection()
         cur = conn.execute('SELECT password FROM users WHERE username = ?', (username,))
@@ -297,8 +339,10 @@ def login():
                 conn.execute('UPDATE users SET api_key = ? WHERE username = ?', (new_key, username))
             conn.commit()
             conn.close()
+            logger.info(f"Login success: username={username} ip={get_client_ip()}")
             return redirect(url_for('upload_file'))
         conn.close()
+        logger.warning(f"Login failure: username={username} ip={get_client_ip()}")
         flash('Invalid username or password')
     return render_template('login.html')
 
@@ -312,6 +356,7 @@ def logout():
 def admin():
     # only admin access
     if 'username' not in session or session.get('username') is None:
+        logger.warning(f"Unauthorized admin access attempt by IP: {get_client_ip()}")
         return redirect(url_for('login'))
     # fetch user role
     conn_u = get_user_db_connection()
@@ -339,6 +384,7 @@ def admin():
                     (u, hashed, r, new_api_key)
                 )
                 conn_u.commit()
+                logger.info(f"Admin {session.get('username')} created user={u} role={r} api_key={new_api_key}")
                 flash(f'User {u} created with API key: {new_api_key}')
         elif action == 'change_role':
             u = request.form.get('username')
@@ -349,6 +395,7 @@ def admin():
             else:
                 conn_u.execute('UPDATE users SET role = ? WHERE username = ?', (r, u))
                 conn_u.commit()
+                logger.info(f"Admin {session.get('username')} changed role for user={u} to role={r}")
                 flash(f'Role for {u} updated')
         elif action == 'reset_password':
             u = request.form.get('username')
@@ -360,6 +407,7 @@ def admin():
                 hashed = hashlib.sha256(p.encode()).hexdigest()
                 conn_u.execute('UPDATE users SET password = ? WHERE username = ?', (hashed, u))
                 conn_u.commit()
+                logger.info(f"Admin {session.get('username')} reset password for user={u}")
                 flash(f'Password for {u} reset')
         elif action == 'delete_user':
             u = request.form.get('username')
@@ -371,6 +419,7 @@ def admin():
             else:
                 conn_u.execute('DELETE FROM users WHERE username = ?', (u,))
                 conn_u.commit()
+                logger.info(f"Admin {session.get('username')} deleted user={u}")
                 flash(f'User {u} deleted')
         # IP ban management
         if action == 'ban_ip':
@@ -385,6 +434,7 @@ def admin():
             conn_b.execute('INSERT OR IGNORE INTO banned_ips (ip, banned_at) VALUES (?, ?)', (ip_to_ban, datetime.utcnow().isoformat()))
             conn_b.commit()
             conn_b.close()
+            logger.warning(f"IP banned: {ip_to_ban} by={session.get('username')}")
             flash(f'IP {ip_to_ban} banned')
             return redirect(url_for('admin'))
         if action == 'unban_ip':
@@ -393,6 +443,7 @@ def admin():
             conn_b.execute('DELETE FROM banned_ips WHERE ip = ?', (ip_to_unban,))
             conn_b.commit()
             conn_b.close()
+            logger.warning(f"IP unbanned: {ip_to_unban} by={session.get('username')}")
             flash(f'IP {ip_to_unban} unbanned')
             return redirect(url_for('admin'))
         conn_u.close()
@@ -491,6 +542,7 @@ def admin():
         except Exception:
             ts = ban_ts
         banned.append((ip, ts))
+    logger.info(f"Admin dashboard accessed by {session.get('username')} from IP {get_client_ip()}")
     return render_template('admin.html', users=users, files=formatted, banned_ips=banned, current_user=session.get('username'))
 
 @app.route('/admin/check')
@@ -504,6 +556,7 @@ def admin_check():
     conn.close()
     if row and row[0] == 'admin':
         return jsonify({'access': True})
+    logger.warning(f"Unauthorized admin check attempt by {username} from IP {get_client_ip()}")
     return jsonify({'access': False}), 403
 
 @app.route('/ban_ip', methods=['POST'])
@@ -531,6 +584,7 @@ def ban_ip():
     )
     conn_b.commit()
     conn_b.close()
+    logger.warning(f"IP banned: {ip_to_ban} by={session.get('username')}")
     flash(f'IP {ip_to_ban} banned')
     return redirect(url_for('admin'))
 
@@ -548,6 +602,7 @@ def ban_ip_remove():
     conn_b.execute('DELETE FROM banned_ips WHERE ip = ?', (ip_to_unban,))
     conn_b.commit()
     conn_b.close()
+    logger.warning(f"IP unbanned: {ip_to_unban} by={session.get('username')}")
     flash(f'IP {ip_to_unban} unbanned')
     return redirect(url_for('admin'))
 
@@ -560,6 +615,7 @@ def API_upload():
     api_key = request.headers.get('X-API-Key') or request.args.get('X-API-Key')
     if not api_key:
         return jsonify({'error': 'API key required'}), 401
+    logger.info(f"API upload request: api_key={api_key} ip={get_client_ip()}")
     # validate API key and fetch user role
     conn_u = get_user_db_connection()
     row = conn_u.execute('SELECT username, role FROM users WHERE api_key = ?', (api_key,)).fetchone()
@@ -576,6 +632,8 @@ def API_upload():
     stored_name = f"{token}_{original_name}"
     save_path = os.path.join(UPLOAD_FOLDER, stored_name)
     file.save(save_path)
+    # ensure uploaded files are not executable
+    os.chmod(save_path, 0o600)
     # enforce size limits: Limited users max 10MB, others max 100MB
     size = os.path.getsize(save_path)
     if role == 'Limited' and size > 10 * 1024 * 1024:
@@ -615,18 +673,21 @@ def API_upload():
         pass
     # return JSON link
     link = request.url_root.rstrip('/') + f"/download/{token}/{original_name}"
+    logger.info(f"API upload successful: token={token} user={username} link={link}")
     return jsonify({'link': link}), 201
 
 @app.route('/api/v1/public_upload', methods=['POST'])
 @csrf.exempt
 # limit public uploads to 5 per IP per day (before reading body)
-@limiter.limit("5 per day")
+@limiter.limit("10 per day")
 def API_public_upload():
     # Public upload endpoint without API key, with a 5MB limit and 1 day expiration
     ip = get_client_ip()
+    logger.info(f"Public upload request: ip={ip} filename={request.files.get('file').filename if request.files.get('file') else None}")
     # reject large bodies early
     content_length = request.content_length
     if content_length is not None and content_length > 5 * 1024 * 1024:
+        logger.warning(f"Public upload too large: ip={ip} size={content_length}")
         return jsonify({'error': 'File too large for public upload (max 5MB)'}), 413
     conn = get_db_connection()
     # count recent public uploads for this IP within last day
@@ -645,12 +706,16 @@ def API_public_upload():
     file = request.files.get('file')
     if not file or not file.filename:
         conn.close()
+        logger.warning(f"Public upload missing file: ip={ip}")
         return jsonify({'error': 'No file provided'}), 400
     original_name = secure_filename(file.filename)
     token = generate_token()
     stored_name = f"{token}_{original_name}"
     save_path = os.path.join(UPLOAD_FOLDER, stored_name)
     file.save(save_path)
+    # ensure uploaded files are not executable
+    os.chmod(save_path, 0o600)
+    logger.info(f"Public upload saved: token={token} file={original_name} path={save_path} ip={ip}")
     # enforce public size limit
     size = os.path.getsize(save_path)
     if size > 5 * 1024 * 1024:
@@ -677,6 +742,7 @@ def API_public_upload():
     except Exception:
         pass
     link = request.url_root.rstrip('/') + f"/download/{token}/{original_name}"
+    logger.info(f"Public upload link generated: {link}")
     return jsonify({'link': link}), 201
 
 @app.route('/api/v1/status', methods=['GET'])
