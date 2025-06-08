@@ -17,6 +17,7 @@ import time
 import ipaddress
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
+import secrets
 
 # Load environment variables from .env in project root
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
@@ -34,13 +35,9 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Initialize Flask app
 app = Flask(__name__)
-# Choose random SECRET_KEY from SECRET_KEYS list and derive secret key
-secret_list = os.getenv('SECRET_KEYS', '').split(',')
-if not secret_list or all(not s for s in secret_list):
-    raise RuntimeError("No SECRET_KEYS configured")
-seed = random.choice(secret_list)
-rng = random.Random(seed)
-app.secret_key = rng.randbytes(24)
+
+# Generate a fresh random secret key on each startup
+app.secret_key = secrets.token_urlsafe(64)
 app.config.update(
     SESSION_COOKIE_SECURE=os.getenv('SESSION_COOKIE_SECURE', 'True') == 'True',
     SESSION_COOKIE_HTTPONLY=os.getenv('SESSION_COOKIE_HTTPONLY', 'True') == 'True',
@@ -67,6 +64,12 @@ Talisman(
     strict_transport_security_preload=True,
     frame_options='DENY'
 )
+
+# Print out loaded environment variables for debugging
+print("Loaded environment variables:")
+for key in os.environ:
+    if key.startswith('SECRET_') or key.startswith('TALISMAN_'):
+        print(f"{key} = {os.environ[key]}")
 
 @app.after_request
 def set_extra_security_headers(response):
@@ -462,7 +465,7 @@ def admin():
             except Exception:
                 exp_str = expires_at
         else:
-            exp_str = 'INF'
+            exp_str = 'Never'
         formatted.append((token, name, size_str, exp_str, ip, user, method))
     # fetch banned IPs
     conn_b = get_banned_db_connection()
@@ -741,10 +744,7 @@ def block_banned_ip():
     row = conn.execute('SELECT ip FROM banned_ips WHERE ip = ?', (ip,)).fetchone()
     conn.close()
     if row:
-        # API endpoints should return JSON error
-        if request.path.startswith('/api/'):
-            return jsonify({'error': 'Your IP has been banned'}), 403
-        return 'Your IP has been banned.', 403
+        return jsonify({'Forbidden 403': 'Your IP has been banned.'}), 403
 
 # Swagger UI and spec endpoints
 @app.route('/docs')
