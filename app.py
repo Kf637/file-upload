@@ -339,6 +339,12 @@ def upload_file():
 @app.route("/download/<token>/<filename>")
 @limiter.limit("20 per 2 minutes")
 def download(token, filename):
+    # validate token and filename formats
+    if not TOKEN_REGEX.match(token):
+        abort(404)
+    safe_fname = secure_filename(filename)
+    if filename != safe_fname:
+        abort(404)
     conn = get_db_connection()
     logger.info(
         f"Download request: token={token} filename={filename} ip={get_client_ip()}"
@@ -382,12 +388,22 @@ def download(token, filename):
     )
 
 
+# Validation regexes for tokens and usernames
+USERNAME_PATTERN = r'^[a-z0-9]{1,150}$'
+TOKEN_PATTERN = r'^[A-Za-z0-9]+$'
+USERNAME_REGEX = re.compile(USERNAME_PATTERN)
+TOKEN_REGEX = re.compile(TOKEN_PATTERN)
+
 # Login routes
 @app.route("/login", methods=["GET", "POST"])
 @limiter.limit("100 per 5 minutes")
 def login():
     if request.method == "POST":
-        username = request.form.get("username").lower()
+        username = request.form.get("username", "").lower()
+        # enforce username format
+        if not USERNAME_REGEX.match(username):
+            flash("Invalid username format")
+            return render_template("login.html")
         password = request.form.get("password")
         logger.info(f"Login attempt: username={username} ip={get_client_ip()}")
         hashed = hashlib.sha256(password.encode()).hexdigest()
@@ -422,15 +438,20 @@ def login():
     return render_template("login.html")
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
+    # Protect logout with CSRF and ensure valid session
     session.clear()
     return redirect(url_for("login"))
 
 
 # Admin dashboard for user and file management
-@app.route("/admin", methods=["GET", "POST"])
+@app.route("/admin", methods=["GET"])
 def admin():
+    # ensure session username format is valid
+    if "username" in session and not USERNAME_REGEX.match(session["username"]):
+        session.clear()
+        return redirect(url_for("login"))
     # only admin access
     if "username" not in session or session.get("username") is None:
         logger.warning(f"Unauthorized admin access attempt by IP: {get_client_ip()}")
@@ -442,179 +463,7 @@ def admin():
     ).fetchone()
     if not cur_role or cur_role[0] != "admin":
         abort(403)
-    if request.method == "POST":
-        action = request.form.get("action")
-        # User management
-        if action == "create_user":
-            u = request.form.get("new_username")
-            p = request.form.get("new_password")
-            r = request.form.get("new_role")
-            # ensure username and role
-            if not u:
-                flash("Username cannot be empty")
-            elif r not in ("Limited", "user", "admin"):
-                flash("Invalid role")
-            else:
-                hashed = hashlib.sha256(p.encode()).hexdigest()
-                # generate API key for new user
-                new_api_key = generate_token(32)
-                conn_u.execute(
-                    "INSERT INTO users (username, password, role, api_key) VALUES (?, ?, ?, ?)",
-                    (u, hashed, r, new_api_key),
-                )
-                conn_u.commit()
-                logger.info(
-                    f"Admin {session.get('username')} created user={u} role={r} api_key={new_api_key}"
-                )
-                if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                    return jsonify({'status': 'ok', 'username': u, 'api_key': new_api_key}), 201
-                flash(f'User {u} created with API key: {new_api_key}')
-                return redirect(url_for('admin'))
-        elif action == "change_role":
-            u = request.form.get("username")
-            r = request.form.get("role")
-            # validate role
-            if r not in ("Limited", "user", "admin"):
-                flash("Invalid role")
-            else:
-                conn_u.execute("UPDATE users SET role = ? WHERE username = ?", (r, u))
-                conn_u.commit()
-                logger.info(
-                    f"Admin {session.get('username')} changed role for user={u} to role={r}"
-                )
-                if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                    return jsonify({'status': 'ok', 'username': u, 'new_role': r}), 200
-                flash(f'Role for {u} updated')
-                return redirect(url_for('admin'))
-        elif action == "reset_password":
-            u = request.form.get("username")
-            p = request.form.get("password")
-            # ensure username provided
-            if not u:
-                flash("Username cannot be empty")
-            else:
-                hashed = hashlib.sha256(p.encode()).hexdigest()
-                conn_u.execute(
-                    "UPDATE users SET password = ? WHERE username = ?", (hashed, u)
-                )
-                conn_u.commit()
-                logger.info(
-                    f"Admin {session.get('username')} reset password for user={u}"
-                )
-                if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                    return jsonify({'status': 'ok', 'username': u}), 200
-                flash(f'Password for {u} reset')
-                return redirect(url_for('admin'))
-        elif action == "delete_user":
-            u = request.form.get("username")
-            # prevent deleting self
-            if u == session.get("username"):
-                flash("Cannot delete current admin")
-            elif not u:
-                flash("Username cannot be empty")
-            else:
-                # open separate DB connection for deletion
-                conn_del = get_user_db_connection()
-                cursor = conn_del.execute('DELETE FROM users WHERE username = ?', (u,))
-                conn_del.commit()
-                if cursor.rowcount == 0:
-                    conn_del.close()
-                    if api_key:
-                        return jsonify({'error': 'User not found'}), 404
-                    flash('User not found')
-                    return redirect(url_for('admin'))
-                conn_del.close()
-                logger.info(f"Admin {session.get('username')} deleted user={u}")
-                if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                    return jsonify({'status': 'ok', 'deleted_user': u}), 200
-                flash(f'User {u} deleted')
-                return redirect(url_for('admin'))
-        # IP ban management
-        if action == "ban_ip":
-            ip_to_ban = request.form.get("ip")
-            # Validate that it's a real IPv4 or IPv6 address
-            try:
-                ipaddress.ip_address(ip_to_ban)
-            except ValueError:
-                flash("Invalid IP address")
-                return redirect(url_for("admin"))
-            conn_b = get_banned_db_connection()
-            conn_b.execute(
-                "INSERT OR IGNORE INTO banned_ips (ip, banned_at) VALUES (?, ?)",
-                (ip_to_ban, datetime.utcnow().isoformat()),
-            )
-            conn_b.commit()
-            conn_b.close()
-            logger.warning(f"IP banned: ip_to_ban by={session.get('username')}")
-            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                return jsonify({'status': 'ok', 'banned_ip': ip_to_ban}), 200
-            flash(f'IP {ip_to_ban} banned')
-            return redirect(url_for('admin'))
-        if action == "unban_ip":
-            ip_to_unban = request.form.get("ip")
-            conn_b = get_banned_db_connection()
-            conn_b.execute("DELETE FROM banned_ips WHERE ip = ?", (ip_to_unban,))
-            conn_b.commit()
-            conn_b.close()
-            logger.warning(f"IP unbanned: {ip_to_unban} by={session.get('username')}")
-            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                return jsonify({'status': 'ok', 'unbanned_ip': ip_to_unban}), 200
-            flash(f'IP {ip_to_unban} unbanned')
-            return redirect(url_for('admin'))
-        conn_u.close()
-        # File management
-        conn_f = get_db_connection()
-        # SHA256 hashing of file
-        if action == "show_sha256":
-            t = request.form.get("token")
-            row = conn_f.execute(
-                "SELECT stored_name, original_name FROM files WHERE token = ?", (t,)
-            ).fetchone()
-            if row:
-                stored_name, original_name = row
-                path = os.path.join(UPLOAD_FOLDER, stored_name)
-                try:
-                    with open(path, "rb") as f:
-                        data = f.read()
-                    h = hashlib.sha256(data).hexdigest()
-                    flash(f"SHA256({original_name}) = {h}")
-                except Exception:
-                    flash("Error calculating SHA256")
-            conn_f.close()
-            return redirect(url_for("admin"))
-        # No SQL injection: tokens validated by DB parameterization
-        if action == "change_expiry":
-            t = request.form.get("token")
-            exp_option = (request.form.get("expire") or "").upper()
-            if exp_option == "INF":
-                new_exp = None
-            else:
-                try:
-                    days = int(exp_option)
-                    new_exp = (datetime.utcnow() + timedelta(days=days)).isoformat()
-                except (TypeError, ValueError):
-                    new_exp = None
-            conn_f.execute(
-                "UPDATE files SET expires_at = ? WHERE token = ?", (new_exp, t)
-            )
-            conn_f.commit()
-            flash(f"Expiry for {t} updated")
-        elif action == "delete_file":
-            t = request.form.get("token")
-            row = conn_f.execute(
-                "SELECT stored_name FROM files WHERE token = ?", (t,)
-            ).fetchone()
-            if row:
-                try:
-                    os.remove(os.path.join(UPLOAD_FOLDER, row[0]))
-                except OSError:
-                    pass
-                conn_f.execute("DELETE FROM files WHERE token = ?", (t,))
-                conn_f.commit()
-                flash(f"File {t} deleted")
-        conn_f.close()
-        return redirect(url_for("admin"))
-    # GET: display tables
+    # Display admin dashboard
     users = conn_u.execute("SELECT username, role, last_ip FROM users").fetchall()
     conn_u.close()
     conn_f = get_db_connection()
@@ -686,6 +535,10 @@ def admin():
 def admin_check():
     # endpoint for client-side to verify admin access
     username = session.get("username")
+    # ensure username format is valid
+    if username and not USERNAME_REGEX.match(username):
+        session.clear()
+        return jsonify({"access": False}), 401
     if not username:
         return jsonify({"access": False}), 401
     conn = get_user_db_connection()
@@ -727,7 +580,10 @@ def API_admin_createuser():
         if not urow or urow[0] != "admin":
             return jsonify({"error": "Forbidden"}), 403
     # perform create user as admin {auth_user}
-    u = request.form.get("new_username")
+    u = request.form.get("new_username", "").strip().lower()
+    # validate username format
+    if not USERNAME_REGEX.match(u):
+        return jsonify({'error': 'Invalid username format'}), 400
     p = request.form.get("new_password")
     r = request.form.get("new_role")
     # ensure username and role
@@ -885,7 +741,13 @@ def API_admin_deleteuser():
         conn_u.close()
         if not urow or urow[0] != "admin":
             return jsonify({"error": "Forbidden"}), 403
-    u = request.form.get('username')
+    u = request.form.get('username', "").strip().lower()
+    # validate username format
+    if not USERNAME_REGEX.match(u):
+        if api_key:
+            return jsonify({'error': 'Invalid username format'}), 400
+        flash('Invalid username format')
+        return redirect(url_for('admin'))
     if u == session.get('username'):
         if api_key:
             return jsonify({'error': 'Cannot delete current admin'}), 400
