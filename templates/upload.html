@@ -8,6 +8,7 @@
         body { background: #121212; color: #e0e0e0; font-family: Arial, sans-serif; margin: 0; padding: 0; }
         .container { max-width: 600px; margin: 50px auto; background: #1e1e1e; padding: 20px; border-radius: 8px; position: relative; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
         h1 { margin: 0 0 20px; color: #90caf9; text-align: center; }
+        h4 { margin: 0 0 20px; color: #90caf9; text-align: center; }
         .admin-btn { position: absolute; top: 20px; right: 20px; background: #1e88e5; color: #e0e0e0; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; }
         .admin-btn:hover { background: #1565c0; }
         .logout-btn { position: absolute; top: 20px; left: 20px; background: #90caf9; color: #121212; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; }
@@ -34,10 +35,11 @@
             <a class="admin-btn" href="{{ url_for('admin') }}">Admin</a>
         {% endif %}
         <h1>Upload a File</h1>
+        <h4>100MB Upload Limit</h4>
          {% if error %}
              <div class="error">{{ error }}</div>
          {% endif %}
-        <form id="uploadForm" action="{{ url_for('upload_file') }}" method="post" enctype="multipart/form-data">
+        <form id="uploadForm" action="{{ url_for('API_upload') }}" method="post" enctype="multipart/form-data">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
             <label for="file">Choose file</label>
             <input type="file" id="file" name="file" required />
@@ -94,6 +96,8 @@
             xhr.open('POST', form.action);
             // mark as AJAX so server returns JSON instead of flash redirect
             xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+            // include API key for authentication
+            xhr.setRequestHeader('X-API-Key', '{{ api_key }}');
             xhr.upload.onprogress = function(event) {
                 if (event.lengthComputable) {
                     const percent = (event.loaded / event.total) * 100;
@@ -102,7 +106,7 @@
                 }
             };
             xhr.onload = function() {
-                if (xhr.status === 200) {
+                if (xhr.status >= 200 && xhr.status < 300) {
                     // attempt to parse JSON link
                     let data;
                     try {
@@ -115,7 +119,7 @@
                         // display download link
                         const flashDiv = document.querySelector('.flash-link') || document.createElement('div');
                         flashDiv.className = 'flash-link';
-                        flashDiv.innerHTML = `<p>Download Link:</p><a href="${data.link}">${data.link}</a><button class="copy-btn" data-link="${data.link}">Copy</button>`;
+                        flashDiv.innerHTML = `<p>Download  Link:</p><a href="${data.link}">${data.link}</a><button class="copy-btn" data-link="${data.link}">Copy</button>`;
                         document.querySelector('.container').appendChild(flashDiv);
                     } else {
                         alert('Upload completed, no link received.');
