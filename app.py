@@ -67,6 +67,10 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=os.getenv("SESSION_COOKIE_HTTPONLY", "True") == "True",
     SESSION_COOKIE_SAMESITE=os.getenv("SESSION_COOKIE_SAMESITE", "Strict"),
 )
+# make sessions permanent with 1-hour timeout
+app.permanent_session_lifetime = timedelta(hours=1)
+# global max content length (100MB)
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
 # Trust proxy headers for correct scheme detection
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 # Enable CSRF protection
@@ -98,13 +102,6 @@ Talisman(
     strict_transport_security_preload=True,
     frame_options="DENY",
 )
-
-# Print out loaded environment variables for debugging
-print("Loaded environment variables:")
-for key in os.environ:
-    if key.startswith("SECRET_") or key.startswith("TALISMAN_"):
-        print(f"{key} = {os.environ[key]}")
-
 
 @app.after_request
 def set_extra_security_headers(response):
