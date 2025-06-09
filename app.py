@@ -1170,6 +1170,57 @@ def API_status():
     # API endpoint to check service status
     return jsonify({"status": "ok"}), 200
 
+@app.route("/api/v1/health_check", methods=["GET"])
+@csrf.exempt
+@limiter.limit("100 per 5 minutes")
+def API_health_check():
+    logger.info("Health check requested")
+    x_api_key = request.headers.get("X-API-Key")
+    if not x_api_key:
+        return jsonify({"error": "API key required"}), 401
+
+    # verify API key belongs to an admin
+    conn_u = get_user_db_connection()
+    urow = conn_u.execute(
+        "SELECT username, role FROM users WHERE api_key = ?", (x_api_key,)
+    ).fetchone()
+    conn_u.close()
+    if not urow or urow[1] != "admin":
+        return jsonify({"error": "Invalid or missing API key"}), 403
+    logger.info(f"Health check by admin user: {urow[0]}")
+
+    try:
+        # check file DB
+        conn1 = get_db_connection()
+        conn1.close()
+        # check users DB
+        conn2 = get_user_db_connection()
+        conn2.close()
+        # check banned IPs DB
+        conn3 = get_banned_db_connection()
+        conn3.close()
+        logger.info("Health check: databases are accessible")
+
+        # check upload folder writability
+        test_file = os.path.join(UPLOAD_FOLDER, ".healthcheck")
+        with open(test_file, "w") as f:
+            f.write("ok")
+        os.remove(test_file)
+        logger.info("Health check: upload folder is writable")
+
+        # verify required templates exist
+        templates = ["admin.html", "login.html", "swagger.html", "upload.html"]
+        for t in templates:
+            path = os.path.join(BASE_DIR, "templates", t)
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Template missing: {t}")
+
+        return jsonify({"status": "ok"}), 200
+
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
 
 # Admin-only API to dump all file records
 @app.route("/api/v1/admin/dumpfiles", methods=["POST"])
@@ -1674,6 +1725,25 @@ def swagger_spec():
                         },
                         "401": {"description": "Authentication required"},
                         "403": {"description": "Forbidden"},
+                    },
+                }
+            },
+            "/api/v1/health_check": {
+                "get": {
+                    "summary": "Health check endpoint",
+                    "parameters": [
+                        {
+                            "name": "X-API-Key",
+                            "in": "header",
+                            "schema": {"type": "string"},
+                            "required": True,
+                        }
+                    ],
+                    "responses": {
+                        "200": {"description": "Service is healthy"},
+                        "401": {"description": "API key required"},
+                        "403": {"description": "Forbidden"},
+                        "500": {"description": "Internal server error"},
                     },
                 }
             },
