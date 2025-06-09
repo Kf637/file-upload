@@ -1004,6 +1004,7 @@ def API_admin_unbanip():
     key_func=lambda: request.headers.get("X-API-Key") or request.args.get("X-API-Key"),
 )
 def API_upload():
+    print("API upload request received")
     # require API key in header or query
     api_key = request.headers.get("X-API-Key") or request.args.get("X-API-Key")
     if not api_key:
@@ -1049,10 +1050,13 @@ def API_upload():
     expires_at = expires_dt.isoformat() if expires_dt else None
     # record in database
     uploader_ip = get_client_ip()
+    # distinguish web AJAX uploads (method Webpage) vs API clients
+    is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    upload_method = 'Webpage' if is_ajax else 'API'
     conn = get_db_connection()
     conn.execute(
         "INSERT INTO files (token, stored_name, original_name, expires_at, uploader_ip, username, method) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (token, stored_name, original_name, expires_at, uploader_ip, username, "API"),
+        (token, stored_name, original_name, expires_at, uploader_ip, username, upload_method),
     )
     conn.commit()
     conn.close()
@@ -1402,6 +1406,7 @@ def swagger_spec():
         "paths": {
             "/api/v1/upload": {
                 "post": {
+                    "tags": ["Public"],
                     "summary": "Upload a file",
                     "parameters": [
                         {
@@ -1445,6 +1450,7 @@ def swagger_spec():
             },
             "/api/v1/public_upload": {
                 "post": {
+                    "tags": ["Public"],
                     "summary": "Public upload without API key limited to 5MB",
                     "requestBody": {
                         "required": True,
@@ -1480,6 +1486,7 @@ def swagger_spec():
             },
             "/api/v1/status": {
                 "get": {
+                    "tags": ["Public"],
                     "summary": "Service status",
                     "responses": {
                         "200": {
@@ -1499,6 +1506,7 @@ def swagger_spec():
             },
             "/api/v1/admin/createuser": {
                 "post": {
+                   "tags": ["Administration"],
                     "summary": "Admin: Create a new user",
                     "parameters": [
                         {
@@ -1540,6 +1548,7 @@ def swagger_spec():
             },
             "/api/v1/admin/changerole": {
                 "post": {
+                   "tags": ["Administration"],
                     "summary": "Admin: Change user role",
                     "parameters": [
                         {
@@ -1576,6 +1585,7 @@ def swagger_spec():
             },
             "/api/v1/admin/changepassword": {
                 "post": {
+                   "tags": ["Administration"],
                     "summary": "Admin: Reset user password",
                     "parameters": [
                         {
@@ -1609,6 +1619,7 @@ def swagger_spec():
             },
             "/api/v1/admin/deleteuser": {
                 "post": {
+                   "tags": ["Administration"],
                     "summary": "Admin: Delete a user",
                     "parameters": [
                         {
@@ -1639,6 +1650,7 @@ def swagger_spec():
             },
             "/api/v1/admin/banip": {
                 "post": {
+                   "tags": ["Administration"],
                     "summary": "Admin: Ban an IP address",
                     "parameters": [
                         {
@@ -1669,6 +1681,7 @@ def swagger_spec():
             },
             "/api/v1/admin/unbanip": {
                 "post": {
+                   "tags": ["Administration"],
                     "summary": "Admin: Unban an IP address",
                     "parameters": [
                         {
@@ -1699,6 +1712,7 @@ def swagger_spec():
             },
             "/api/v1/admin/dumpfiles": {
                 "post": {
+                   "tags": ["Administration"],
                     "summary": "Admin: Delete all files and clear database",
                     "parameters": [
                         {
@@ -1730,6 +1744,7 @@ def swagger_spec():
             },
             "/api/v1/health_check": {
                 "get": {
+                    "tags": ["Administration"],
                     "summary": "Health check endpoint",
                     "parameters": [
                         {
