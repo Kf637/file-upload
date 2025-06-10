@@ -554,9 +554,10 @@ def admin_check():
 @app.route("/api/v1/admin/createuser", methods=["POST"])
 @csrf.exempt
 def API_admin_createuser():
-    # authenticate admin via session or API key
+    # authenticate admin via API key or web session
     api_key = request.headers.get("X-API-Key")
     if api_key:
+        # API client path: require valid admin API key
         conn_u = get_user_db_connection()
         urow = conn_u.execute(
             "SELECT username, role FROM users WHERE api_key = ?", (api_key,)
@@ -565,17 +566,22 @@ def API_admin_createuser():
         if not urow or urow[1] != "admin":
             return jsonify({"error": "Invalid or missing API key"}), 403
         auth_user = urow[0]
+        is_api = True
     else:
+        # web client path: require logged-in admin session
         if "username" not in session:
-            return jsonify({"error": "Authentication required"}), 401
-        auth_user = session["username"]
+            flash("Authentication required")
+            return redirect(url_for("login"))
         conn_u = get_user_db_connection()
         urow = conn_u.execute(
-            "SELECT role FROM users WHERE username = ?", (auth_user,)
+            "SELECT role FROM users WHERE username = ?", (session["username"],)
         ).fetchone()
         conn_u.close()
         if not urow or urow[0] != "admin":
-            return jsonify({"error": "Forbidden"}), 403
+            flash("Forbidden")
+            return redirect(url_for("admin"))
+        auth_user = session["username"]
+        is_api = False
     # perform create user as admin {auth_user}
     u = request.form.get("new_username", "").strip().lower()
     # validate username format
@@ -1144,6 +1150,156 @@ def API_dump_files():
     return redirect(url_for('admin'))
 
 
+@app.route("/api/v1/admin/deletefile", methods=["POST"])
+@csrf.exempt
+@limiter.limit("10 per minute")
+def API_admin_deletefile():
+    # authenticate admin via X-API-Key or session
+    api_key = request.headers.get("X-API-Key")
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    if api_key:
+        conn_u = get_user_db_connection()
+        urow = conn_u.execute(
+            "SELECT username, role FROM users WHERE api_key = ?", (api_key,)
+        ).fetchone()
+        conn_u.close()
+        if not urow or urow[1] != "admin":
+            return jsonify({"error": "Invalid or missing API key"}), 403
+        auth_user = urow[0]
+    else:
+        if "username" not in session:
+            return jsonify({"error": "Authentication required"}), 401
+        auth_user = session["username"]
+        conn_u = get_user_db_connection()
+        urow = conn_u.execute(
+            "SELECT role FROM users WHERE username = ?", (auth_user,)
+        ).fetchone()
+        conn_u.close()
+        if not urow or urow[0] != "admin":
+            return jsonify({"error": "Forbidden"}), 403
+    # delete file record and disk file
+    token = request.form.get("token")
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT stored_name FROM files WHERE token = ?", (token,)
+    ).fetchone()
+    if row:
+        try:
+            os.remove(os.path.join(UPLOAD_FOLDER, row[0]))
+        except OSError:
+            pass
+        conn.execute("DELETE FROM files WHERE token = ?", (token,))
+        conn.commit()
+    conn.close()
+    logger.info(f"Admin {auth_user} deleted file token={token}")
+    if api_key or is_ajax:
+        return jsonify({"status": "ok", "deleted_token": token}), 200
+    flash(f'File {token} deleted')
+    return redirect(url_for('admin'))
+
+
+@app.route("/api/v1/admin/changeexpiry", methods=["POST"])
+@csrf.exempt
+@limiter.limit("10 per minute")
+def API_admin_changeexpiry():
+    # authenticate admin
+    api_key = request.headers.get("X-API-Key")
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    if api_key:
+        conn_u = get_user_db_connection()
+        urow = conn_u.execute(
+            "SELECT username, role FROM users WHERE api_key = ?", (api_key,)
+        ).fetchone()
+        conn_u.close()
+        if not urow or urow[1] != "admin":
+            return jsonify({"error": "Invalid or missing API key"}), 403
+        auth_user = urow[0]
+    else:
+        if "username" not in session:
+            return jsonify({"error": "Authentication required"}), 401
+        auth_user = session["username"]
+        conn_u = get_user_db_connection()
+        urow = conn_u.execute(
+            "SELECT role FROM users WHERE username = ?", (auth_user,)
+        ).fetchone()
+        conn_u.close()
+        if not urow or urow[0] != "admin":
+            return jsonify({"error": "Forbidden"}), 403
+    token = request.form.get("token")
+    expire_opt = (request.form.get("expire") or "").upper()
+    if expire_opt == "INF":
+        expires_at = None
+    else:
+        try:
+            days = int(expire_opt)
+            expires_at = (datetime.utcnow() + timedelta(days=days)).isoformat()
+        except:
+            expires_at = None
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE files SET expires_at = ? WHERE token = ?", (expires_at, token)
+    )
+    conn.commit()
+    conn.close()
+    logger.info(f"Admin {auth_user} changed expiry for token={token} to {expires_at}")
+    if api_key or is_ajax:
+        return jsonify({"status": "ok", "token": token, "expires_at": expires_at}), 200
+    flash(f"Expiry updated for {token}")
+    return redirect(url_for('admin'))
+
+
+@app.route("/api/v1/admin/showsha256", methods=["POST"])
+@csrf.exempt
+@limiter.limit("10 per minute")
+def API_admin_showsha256():
+    # authenticate admin
+    api_key = request.headers.get("X-API-Key")
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    if api_key:
+        conn_u = get_user_db_connection()
+        urow = conn_u.execute(
+            "SELECT username, role FROM users WHERE api_key = ?", (api_key,)
+        ).fetchone()
+        conn_u.close()
+        if not urow or urow[1] != "admin":
+            return jsonify({"error": "Invalid or missing API key"}), 403
+        auth_user = urow[0]
+    else:
+        if "username" not in session:
+            return jsonify({"error": "Authentication required"}), 401
+        auth_user = session["username"]
+        conn_u = get_user_db_connection()
+        urow = conn_u.execute(
+            "SELECT role FROM users WHERE username = ?", (auth_user,)
+        ).fetchone()
+        conn_u.close()
+        if not urow or urow[0] != "admin":
+            return jsonify({"error": "Forbidden"}), 403
+    token = request.form.get("token")
+    conn = get_db_connection()
+    row = conn.execute("SELECT stored_name FROM files WHERE token = ?", (token,)).fetchone()
+    conn.close()
+    if not row:
+        if api_key or is_ajax:
+            return jsonify({"error": "File not found"}), 404
+        flash(f"File {token} not found")
+        return redirect(url_for('admin'))
+    file_path = os.path.join(UPLOAD_FOLDER, row[0])
+    try:
+        with open(file_path, "rb") as f:
+            file_hash = hashlib.sha256(f.read()).hexdigest()
+    except Exception:
+        if api_key or is_ajax:
+            return jsonify({"error": "Could not read file"}), 500
+        flash(f"Failed to compute SHA256 for {token}")
+        return redirect(url_for('admin'))
+    logger.info(f"Admin {auth_user} computed SHA256 for token={token}")
+    if api_key or is_ajax:
+        return jsonify({"token": token, "sha256": file_hash}), 200
+    flash(f"SHA256 for {token}: {file_hash}")
+    return redirect(url_for('admin'))
+
+
 @app.context_processor
 def inject_user():
     # provide is_admin, user_role, and api_key to templates
@@ -1244,6 +1400,27 @@ def block_banned_ip():
             )
         except Exception as e:
             logger.error(f"Error updating last_ip: {e}")
+
+
+@app.before_request
+def require_auth_for_api():
+    # enforce API key or logged-in session for all API v1 endpoints, except public paths
+    if request.path in ['/api/v1/public_upload', '/api/v1/status']:
+        return
+    # enforce API key or logged-in session for all other API v1 endpoints
+    if request.path.startswith('/api/v1/'):
+        api_key = request.headers.get('X-API-Key')
+        if api_key:
+            conn = get_user_db_connection()
+            valid = conn.execute(
+                "SELECT 1 FROM users WHERE api_key = ?", (api_key,)
+            ).fetchone()
+            conn.close()
+            if not valid:
+                return jsonify({'error': 'Invalid API key'}), 401
+        else:
+            if 'username' not in session:
+                return jsonify({'error': 'Authentication required'}), 401
 
 
 # Swagger UI and spec endpoints
