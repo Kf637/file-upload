@@ -23,8 +23,17 @@
 </head>
 <body>
   <h1>Admin Dashboard</h1>
-  <a href="{{ url_for('logout') }}">Logout</a>
+  <form action="{{ url_for('logout') }}" method="post" style="display:inline; margin-right:10px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+    <button type="submit" style="background:none;border:none;color:#64b5f6;cursor:pointer;padding:0;font:inherit;">Logout</button>
+  </form>
   <a href="{{ url_for('upload_file') }}">Return to Upload</a>
+  <!-- Disk usage display -->
+  <div style="margin: 20px 0;">
+    <strong>Disk Usage:</strong><br />
+    Total: {{ total_space }}<br />
+    Remaining: {{ remaining_space }}
+  </div>
 
   {% with messages = get_flashed_messages() %}
     {% if messages %}
@@ -102,7 +111,7 @@
         <td>{{ user }}</td>
         <td>{{ method }}</td>
         <td>
-          <form method="post" style="display:inline">
+          <form method="post" action="{{ url_for('API_admin_changeexpiry') }}" style="display:inline">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
             <input type="hidden" name="action" value="change_expiry" />
             <input type="hidden" name="token" value="{{ token }}" />
@@ -114,14 +123,14 @@
             </select>
             <button type="submit">Update</button>
           </form>
-          <form method="post" style="display:inline">
+          <form method="post" action="{{ url_for('API_admin_deletefile') }}" style="display:inline">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
             <input type="hidden" name="action" value="delete_file" />
             <input type="hidden" name="token" value="{{ token }}" />
             <button type="submit">Delete</button>
           </form>
           <!-- SHA256 button -->
-          <form method="post" style="display:inline">
+          <form method="post" action="{{ url_for('API_admin_showsha256') }}" style="display:inline">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
              <input type="hidden" name="action" value="show_sha256" />
              <input type="hidden" name="token" value="{{ token }}" />
