@@ -31,6 +31,7 @@ from dotenv import load_dotenv
 import secrets
 import logging
 import requests
+import shutil
 
 # Load environment variables from .env in project root
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -84,6 +85,7 @@ csp = {
         "'unsafe-inline'",
         "https://unpkg.com",
         "https://challenges.cloudflare.com",
+        "https://static.cloudflareinsights.com",
     ],  # allow inline scripts, Swagger, and Turnstile assets
     "style-src": [
         "'self'",
@@ -531,11 +533,21 @@ def admin():
     logger.info(
         f"Admin dashboard accessed by {session.get('username')} from IP {get_client_ip()}"
     )
+    # compute total and remaining disk space for upload folder
+    try:
+        usage = shutil.disk_usage(UPLOAD_FOLDER)
+        total_space = human_size(usage.total)
+        remaining_space = human_size(usage.free)
+    except OSError:
+        total_space = "N/A"
+        remaining_space = "N/A"
     return render_template(
         "admin.html",
         users=users,
         files=formatted,
         banned_ips=banned,
+        total_space=total_space,
+        remaining_space=remaining_space,
         current_user=session.get("username"),
     )
 
