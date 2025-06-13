@@ -6,3 +6,4 @@ gunicorn  # optional; on Windows, use waitress instead
 waitress
 ipaddress
 dotenv
+requests
