@@ -933,7 +933,6 @@ def API_upload():
     expires_at = expires_dt.isoformat() if expires_dt else None
     # record in database
     uploader_ip = get_client_ip()
-    # distinguish web AJAX uploads (method Webpage) vs API clients
     is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
     upload_method = 'Webpage' if is_ajax else 'API'
     conn = get_db_connection()
@@ -960,8 +959,14 @@ def API_upload():
             )
     except Exception:
         pass
-    # return JSON link
-    link = request.url_root.rstrip("/") + f"/download/{token}/{original_name}"
+    # build HTTPS download link explicitly
+    link = url_for(
+        'download',
+        token=token,
+        filename=original_name,
+        _external=True,
+        _scheme='https'
+    )
     logger.info(f"API upload successful: token={token} user={username} link={link}")
     return jsonify({"link": link}), 201
 
@@ -1118,6 +1123,24 @@ def API_health_check():
             raise ValueError("Cloudflare Turnstile site key or secret key is not set")
         logger.info("Health check: Cloudflare Turnstile is reachable and site key is set")
         # All checks passed
+
+        # Test connection to endpoints upload.jerdal.no/login /admin /upload
+        test_login_url = url_for("login", _external=True)
+        test_admin_url = url_for("admin", _external=True)
+        test_upload_url = url_for("upload_file", _external=True)
+        logger.info(f"Testing connectivity to endpoints: {test_login_url}, {test_admin_url}, {test_upload_url}")
+        try:
+            login_response = requests.get(test_login_url, timeout=5)
+            admin_response = requests.get(test_admin_url, timeout=5)
+            upload_response = requests.get(test_upload_url, timeout=5)
+            if upload_response.status_code != 200:
+                raise ConnectionError("Upload endpoint unreachable")
+            if login_response.status_code != 200 or admin_response.status_code != 200:
+                raise ConnectionError("Login or Admin endpoint unreachable")
+        except requests.RequestException as e:
+            raise ConnectionError(f"Endpoint connectivity failed: {e}")
+        logger.info("Health check: endpoints are reachable")
+
 
         return jsonify({"status": "ok"}), 200
 
