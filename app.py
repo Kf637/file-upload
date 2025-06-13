@@ -1102,6 +1102,24 @@ def API_health_check():
             if not os.path.exists(path):
                 raise FileNotFoundError(f"Template missing: {t}")
 
+        # Tets Cloudflare Turnstile
+        # Check if CF can be reached
+        try:
+            response = requests.get(
+                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                timeout=5
+            )
+            if response.status_code != 200:
+                raise ConnectionError("Cloudflare Turnstile unreachable")
+        except requests.RequestException as e:
+            raise ConnectionError(f"Cloudflare Turnstile check failed: {e}")
+
+        # Check if Turnstile site key and secret key are set
+        if not TURNSTILE_SITE_KEY or not TURNSTILE_SECRET_KEY:
+            raise ValueError("Cloudflare Turnstile site key or secret key is not set")
+        logger.info("Health check: Cloudflare Turnstile is reachable and site key is set")
+        # All checks passed
+
         return jsonify({"status": "ok"}), 200
 
     except Exception as e:
