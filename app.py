@@ -30,6 +30,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 import secrets
 import logging
+import requests
 
 # Load environment variables from .env in project root
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -82,13 +83,15 @@ csp = {
         "'self'",
         "'unsafe-inline'",
         "https://unpkg.com",
-    ],  # allow inline scripts and Swagger assets
+        "https://challenges.cloudflare.com",
+    ],  # allow inline scripts, Swagger, and Turnstile assets
     "style-src": [
         "'self'",
         "'unsafe-inline'",
         "https://unpkg.com",
     ],  # allow inline CSS and Swagger assets
     "img-src": ["'self'", "data:"],
+    "frame-src": ["'self'", "https://challenges.cloudflare.com"],
     "frame-ancestors": ["'none'"],
 }
 Talisman(
@@ -396,11 +399,20 @@ TOKEN_REGEX = re.compile(TOKEN_PATTERN)
 @limiter.limit("100 per 5 minutes")
 def login():
     if request.method == "POST":
+        # Verify Turnstile challenge
+        cf_token = request.form.get("cf-turnstile-response")
+        if not verify_turnstile(cf_token, get_client_ip()):
+            flash("Turnstile verification failed")
+            logger.warning(
+                f"Turnstile verification failed for IP: {get_client_ip()}"
+            )
+            return render_template("login.html", site_key=TURNSTILE_SITE_KEY)
+    if request.method == "POST":
         username = request.form.get("username", "").lower()
         # enforce username format
         if not USERNAME_REGEX.match(username):
             flash("Invalid username format")
-            return render_template("login.html")
+            return render_template("login.html", site_key=TURNSTILE_SITE_KEY)
         password = request.form.get("password")
         logger.info(f"Login attempt: username={username} ip={get_client_ip()}")
         hashed = hashlib.sha256(password.encode()).hexdigest()
@@ -432,7 +444,7 @@ def login():
         conn.close()
         logger.warning(f"Login failure: username={username} ip={get_client_ip()}")
         flash("Invalid username or password")
-    return render_template("login.html")
+    return render_template("login.html", site_key=TURNSTILE_SITE_KEY)
 
 
 @app.route("/logout", methods=["POST"])
@@ -828,9 +840,10 @@ def API_admin_banip():
 @app.route("/api/v1/admin/unbanip", methods=["POST"])
 @csrf.exempt
 def API_admin_unbanip():
-    # authenticate admin via session or API key
+    # authenticate admin via API key or web session
     api_key = request.headers.get("X-API-Key")
     if api_key:
+        # API client path: require valid admin API key
         conn_u = get_user_db_connection()
         urow = conn_u.execute(
             "SELECT username, role FROM users WHERE api_key = ?", (api_key,)
@@ -839,17 +852,22 @@ def API_admin_unbanip():
         if not urow or urow[1] != "admin":
             return jsonify({"error": "Invalid or missing API key"}), 403
         auth_user = urow[0]
+        is_api = True
     else:
+        # web client path: require logged-in admin session
         if "username" not in session:
-            return jsonify({"error": "Authentication required"}), 401
-        auth_user = session["username"]
+            flash("Authentication required")
+            return redirect(url_for("login"))
         conn_u = get_user_db_connection()
         urow = conn_u.execute(
-            "SELECT role FROM users WHERE username = ?", (auth_user,)
+            "SELECT role FROM users WHERE username = ?", (session["username"],)
         ).fetchone()
         conn_u.close()
         if not urow or urow[0] != "admin":
-            return jsonify({"error": "Forbidden"}), 403
+            flash("Forbidden")
+            return redirect(url_for("admin"))
+        auth_user = session["username"]
+        is_api = False
     ip_to_unban = request.form.get('ip')
     conn_b = get_banned_db_connection()
     conn_b.execute('DELETE FROM banned_ips WHERE ip = ?', (ip_to_unban,))
@@ -1801,3 +1819,21 @@ def swagger_spec():
         },
     }
     return jsonify(spec)
+
+# Cloudflare Turnstile keys loaded from environment
+TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY")
+TURNSTILE_SITE_KEY = os.getenv("TURNSTILE_SITE_KEY")
+
+def verify_turnstile(token, remoteip=None):
+    if not TURNSTILE_SECRET_KEY or not token:
+        return False
+    data = {"secret": TURNSTILE_SECRET_KEY, "response": token}
+    if remoteip:
+        data["remoteip"] = remoteip
+    try:
+        resp = requests.post("https://challenges.cloudflare.com/turnstile/v0/siteverify", data=data, timeout=5)
+        result = resp.json()
+        return result.get("success", False)
+    except Exception as e:
+        logger.error(f"Turnstile verification error: {e}")
+        return False
