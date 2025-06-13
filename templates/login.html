@@ -10,6 +10,9 @@
             height: 100%;
             margin: 0;
         }
+        /* center Turnstile widget */
+        .cf-turnstile { margin: 15px auto; }
+
         body {
             display: flex;
             flex-direction: column;
@@ -61,6 +64,7 @@
             text-align: center;
         }
     </style>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
 <body>
     <h1>File Hosting Service</h1>
@@ -76,6 +80,7 @@
         <input type="text" name="username" placeholder="Username" required />
         <input type="password" name="password" placeholder="Password" required />
         <button type="submit">Login</button>
+        <div class="cf-turnstile" data-sitekey="{{ site_key }}"></div>
     </form>
     <button onclick="location.href='/swagger';"
         style="background: #42a5f5;
