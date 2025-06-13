@@ -1102,17 +1102,16 @@ def API_health_check():
             if not os.path.exists(path):
                 raise FileNotFoundError(f"Template missing: {t}")
 
-        # Tets Cloudflare Turnstile
-        # Check if CF can be reached
+        # Test Cloudflare Turnstile connectivity (JS asset)
         try:
             response = requests.get(
-                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                "https://challenges.cloudflare.com/turnstile/v0/api.js",
                 timeout=5
             )
             if response.status_code != 200:
-                raise ConnectionError("Cloudflare Turnstile unreachable")
+                raise ConnectionError("Cloudflare Turnstile JS asset unreachable")
         except requests.RequestException as e:
-            raise ConnectionError(f"Cloudflare Turnstile check failed: {e}")
+            raise ConnectionError(f"Cloudflare Turnstile connectivity failed: {e}")
 
         # Check if Turnstile site key and secret key are set
         if not TURNSTILE_SITE_KEY or not TURNSTILE_SECRET_KEY:
