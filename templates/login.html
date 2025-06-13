@@ -53,6 +53,12 @@
             transition: background 0.3s;
         }
         button:hover { background: #0039cb; }
+        button:disabled {
+            opacity: 0.6;
+            background: #444;
+            color: #888;
+            cursor: not-allowed;
+        }
         .error { color: #cf6679; text-align: center; }
         a { color: #82b1ff; text-decoration: none; }
         a:hover { text-decoration: underline; }
@@ -79,9 +85,26 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
         <input type="text" name="username" placeholder="Username" required />
         <input type="password" name="password" placeholder="Password" required />
-        <button type="submit">Login</button>
-        <div class="cf-turnstile" data-sitekey="{{ site_key }}"></div>
+        <button id="loginBtn" type="submit" disabled>Login</button>
+        <div class="cf-turnstile" data-sitekey="{{ site_key }}" data-callback="captchaCompleted" data-expired-callback="captchaExpired"></div>
     </form>
+    <script>
+        // Disable login until captcha is completed
+        document.addEventListener('DOMContentLoaded', () => {
+            const btn = document.getElementById('loginBtn');
+            if (btn) btn.disabled = true;
+        });
+        // Called when captcha is solved
+        function captchaCompleted(token) {
+            const btn = document.getElementById('loginBtn');
+            if (btn) btn.disabled = false;
+        }
+        // Called when captcha expires
+        function captchaExpired() {
+            const btn = document.getElementById('loginBtn');
+            if (btn) btn.disabled = true;
+        }
+    </script>
     <button onclick="location.href='/swagger';"
         style="background: #42a5f5;
                color: #121212;
