@@ -536,9 +536,13 @@ def admin():
     # compute total and remaining disk space for upload folder
     try:
         usage = shutil.disk_usage(UPLOAD_FOLDER)
+        total_bytes = usage.total
+        remaining_bytes = usage.free
         total_space = human_size(usage.total)
         remaining_space = human_size(usage.free)
     except OSError:
+        total_bytes = 0
+        remaining_bytes = 0
         total_space = "N/A"
         remaining_space = "N/A"
     return render_template(
@@ -548,6 +552,8 @@ def admin():
         banned_ips=banned,
         total_space=total_space,
         remaining_space=remaining_space,
+        total_bytes=total_bytes,
+        remaining_bytes=remaining_bytes,
         current_user=session.get("username"),
     )
 
