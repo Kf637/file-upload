@@ -9,8 +9,10 @@
         .container { max-width: 600px; margin: 50px auto; background: #1e1e1e; padding: 20px; border-radius: 8px; position: relative; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
         h1 { margin: 0 0 20px; color: #90caf9; text-align: center; }
         h4 { margin: 0 0 20px; color: #90caf9; text-align: center; }
-        .admin-btn { position: absolute; top: 20px; right: 20px; background: #1e88e5; color: #e0e0e0; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; }
+        .admin-btn { position: absolute; top: 60px; right: 20px; background: #1e88e5; color: #e0e0e0; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; }
+        .upload-btn { position: absolute; top: 20px; right: 20px; background: #42a5f5; color: #121212; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; }
         .admin-btn:hover { background: #1565c0; }
+        .upload-btn:hover { background: #1e88e5; }
         .logout-btn { position: absolute; top: 20px; left: 20px; background: #90caf9; color: #121212; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; }
         .logout-btn:hover { background: #64b5f6; }
         form { display: flex; flex-direction: column; }
@@ -35,15 +37,31 @@
         .flash-link a:hover { text-decoration: underline; }
         .copy-btn { background: #90caf9; border: none; color: #121212; padding: 6px 12px; margin-left: 10px; border-radius: 4px; cursor: pointer; }
         .copy-btn:hover { background: #64b5f6; }
+        .copy-preview-btn {
+            background: #90caf9;
+            border: none;
+            color: #121212;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .copy-preview-btn:hover { background: #64b5f6; }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 8px;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="container"> 
         <!-- Logout button visible to all users -->
         <form action="{{ url_for('logout') }}" method="post" style="display:inline;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
             <button type="submit" class="logout-btn">Logout</button>
         </form>
+        <!-- Button to /uploads -->
+        <a class="upload-btn" href="{{ url_for('user_uploads') }}">My Uploads</a>
         {% if is_admin %}
             <a class="admin-btn" href="{{ url_for('admin') }}">Admin</a>
         {% endif %}
@@ -72,8 +90,12 @@
                 {% for msg in messages %}
                     <div class="flash-link">
                         <p style="margin-bottom: 8px;">Download Link:</p>
-                        <a href="{{ msg }}" style="display: block; margin-bottom: 8px;">{{ msg }}</a>
+                    <a href="{{ msg }}" style="display: block; margin-bottom: 8px;">{{ msg }}</a>
+                    <div class="button-group">
                         <button class="copy-btn" data-link="{{ msg }}">Copy</button>
+                        {% set preview_url = msg|replace('/download/', '/preview/') %}
+                        <button class="copy-preview-btn" data-preview-link="{{ preview_url }}">Copy Preview</button>
+                    </div>
                     </div>
                 {% endfor %}
             {% endif %}
@@ -124,7 +146,6 @@
             };
             xhr.onload = function() {
                 if (xhr.status >= 200 && xhr.status < 300) {
-                    // attempt to parse JSON link
                     let data;
                     try {
                         data = JSON.parse(xhr.responseText);
@@ -133,10 +154,10 @@
                         return;
                     }
                     if (data.link) {
-                        // display download link
+                        const previewLink = data.link.replace('/download/', '/download/preview/');
                         const flashDiv = document.querySelector('.flash-link') || document.createElement('div');
                         flashDiv.className = 'flash-link';
-                        flashDiv.innerHTML = `<p>Download  Link:</p><a href="${data.link}">${data.link}</a><button class="copy-btn" data-link="${data.link}">Copy</button>`;
+                        flashDiv.innerHTML = `<p>Download Link:</p><a href="${data.link}">${data.link}</a><button class="copy-btn" data-link="${data.link}">Copy</button><button class="copy-preview-btn" data-preview-link="${previewLink}">Copy Preview</button>`;
                         document.querySelector('.container').appendChild(flashDiv);
                     } else {
                         alert('Upload completed, no link received.');
@@ -154,6 +175,13 @@
                 navigator.clipboard.writeText(url).then(() => {
                     e.target.textContent = 'Copied!';
                     setTimeout(() => e.target.textContent = 'Copy', 2000);
+                });
+            }
+            if (e.target.classList.contains('copy-preview-btn')) {
+                const url = e.target.getAttribute('data-preview-link');
+                navigator.clipboard.writeText(url).then(() => {
+                    e.target.textContent = 'Copied!';
+                    setTimeout(() => e.target.textContent = 'Copy Preview', 2000);
                 });
             }
         });
