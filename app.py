@@ -389,6 +389,64 @@ def download(token, filename):
         conditional=False,
     )
 
+@app.route("/preview/<token>/<filename>")
+@csrf.exempt
+# Preview route for images, video, and text files
+def preview(token, filename):
+    # validate token and filename
+    if not TOKEN_REGEX.match(token):
+        abort(404)
+    safe_fname = secure_filename(filename)
+    if filename != safe_fname:
+        abort(404)
+    # fetch file record
+    conn = get_db_connection()
+    cur = conn.execute(
+        "SELECT stored_name, original_name, expires_at FROM files WHERE token = ?",
+        (token,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row or filename != row[1]:
+        abort(404)
+    stored_name, original_name, expires_at = row
+    # expiration check
+    if expires_at:
+        exp_dt = datetime.fromisoformat(expires_at) + timedelta(hours=2)
+        if datetime.utcnow() > exp_dt:
+            abort(404)
+    # build absolute path
+    base_dir = os.path.abspath(UPLOAD_FOLDER)
+    file_path = os.path.abspath(os.path.join(base_dir, stored_name))
+    if not file_path.startswith(base_dir + os.sep):
+        abort(404)
+    # determine mime type for preview
+    ext = os.path.splitext(original_name)[1].lower()
+    if ext in ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'):
+        mimetype = f'image/{ext.lstrip('.')}'
+    elif ext in ('.mp4', '.webm', '.ogg', '.mov'):
+        mimetype = f'video/{ext.lstrip('.')}'
+    else:
+        mimetype = 'text/plain'
+    # serve inline (no attachment)
+    # Detect Discord embed requests and serve HTML with Open Graph meta tags
+    ua = request.headers.get('User-Agent', '')
+    if 'discordbot' in ua.lower():
+        title = original_name
+        preview_url = request.url
+        return render_template(
+            'preview_embed.html',
+            title=title,
+            mimetype=mimetype,
+            preview_url=preview_url
+        )
+    return send_file(
+        file_path,
+        mimetype=mimetype,
+        as_attachment=False,
+        download_name=original_name,
+        conditional=False,
+    )
 
 # Validation regexes for tokens and usernames
 USERNAME_PATTERN = r'^[a-z0-9]{1,150}$'
@@ -1142,7 +1200,6 @@ def API_health_check():
         logger.info("Health check: Cloudflare Turnstile is reachable and site key is set")
         # All checks passed
 
-        # Test connection to endpoints upload.jerdal.no/login /admin /upload
         test_login_url = url_for("login", _external=True)
         test_admin_url = url_for("admin", _external=True)
         test_upload_url = url_for("upload_file", _external=True)
@@ -1374,6 +1431,51 @@ def API_admin_showsha256():
         return jsonify({"token": token, "sha256": file_hash}), 200
     flash(f"SHA256 for {token}: {file_hash}")
     return redirect(url_for('admin'))
+
+
+@app.route("/uploads", methods=["GET"])
+def user_uploads():
+    # show current user's uploaded files
+    username = session.get("username")
+    if not username or not USERNAME_REGEX.match(username):
+        session.clear()
+        return redirect(url_for("login"))
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT token, stored_name, original_name, expires_at FROM files WHERE username = ?",
+        (username,)
+    ).fetchall()
+    conn.close()
+    # helper to format size
+    def human_size(num):
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if num < 1024.0:
+                return f"{num:.2f} {unit}"
+            num /= 1024.0
+        return f"{num:.2f} PB"
+    formatted = []
+    for token, stored, orig, expires_at in rows:
+        path = os.path.join(UPLOAD_FOLDER, stored)
+        try:
+            size = os.path.getsize(path)
+            size_str = human_size(size)
+        except OSError:
+            size_str = "N/A"
+        if expires_at:
+            try:
+                dt = datetime.fromisoformat(expires_at)
+                dt = dt.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=2)))
+                exp_str = dt.strftime("%d-%m-%Y %H:%M GMT+2")
+            except Exception:
+                exp_str = expires_at
+        else:
+            exp_str = "Never"
+        formatted.append({'token': token, 'name': orig, 'size': size_str, 'expires': exp_str})
+    return render_template(
+        "uploads.html",
+        files=formatted,
+        current_user=username
+    )
 
 
 @app.context_processor
@@ -1895,3 +1997,33 @@ def verify_turnstile(token, remoteip=None):
     except Exception as e:
         logger.error(f"Turnstile verification error: {e}")
         return False
+
+@app.route("/uploads/delete", methods=["POST"])
+def user_delete_file():
+    # allow users to delete their own uploads
+    username = session.get("username")
+    if not username or not USERNAME_REGEX.match(username):
+        session.clear()
+        return redirect(url_for("login"))
+    token = request.form.get("token")
+    if not token or not TOKEN_REGEX.match(token):
+        abort(404)
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT stored_name, username FROM files WHERE token = ?", (token,)
+    ).fetchone()
+    if not row or row[1] != username:
+        conn.close()
+        abort(404)
+    stored_name = row[0]
+    # remove file from disk
+    try:
+        os.remove(os.path.join(UPLOAD_FOLDER, stored_name))
+    except OSError:
+        pass
+    # delete DB record
+    conn.execute("DELETE FROM files WHERE token = ?", (token,))
+    conn.commit()
+    conn.close()
+    flash("File deleted successfully")
+    return redirect(url_for("user_uploads"))
