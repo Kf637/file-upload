@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Uploads | File Service</title>
+    <style>
+        body { background: #121212; color: #e0e0e0; font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        a.button { background: #42a5f5; color: #000; text-decoration: none; padding: 8px 14px; border-radius: 4px; }
+        a.button:hover { background: #1e88e5; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #333; padding: 8px; text-align: left; }
+        th { background: #1e1e1e; }
+        tr:nth-child(even) { background: #1e1e1e; }
+        tr:nth-child(odd) { background: #2e2e2e; }
+        .empty { margin-top: 40px; text-align: center; color: #aaa; }
+        .flash { background: #333; padding: 10px; margin-bottom: 20px; border-radius: 4px; }
+        /* Copy link button */
+        .copy-btn { background: #90caf9; border: none; color: #121212; padding: 6px 12px; margin-left: 10px; border-radius: 4px; cursor: pointer; }
+        .copy-btn:hover { background: #64b5f6; }
+        /* Copy preview button */
+        .copy-preview-btn { background: #90caf9; border: none; color: #121212; padding: 6px 12px; margin-left: 10px; border-radius: 4px; cursor: pointer; }
+        .copy-preview-btn:hover { background: #64b5f6; }
+        /* Delete button */
+        .delete-btn { background: #ef5350; border: none; color: #fff; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+        .delete-btn:hover { background: #e53935; }
+        /* Logout button */
+        .logout-btn { background: #90caf9; border: none; color: #121212; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+        .logout-btn:hover { background: #64b5f6; }
+    </style>
+</head>
+<body>
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div class="flash">
+          {% for msg in messages %}
+            <p>{{ msg }}</p>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    <div class="nav">
+        <h1>Your Uploads</h1>
+        <div>
+            <a href="{{ url_for('upload_file') }}" class="button">Upload</a>
+            <form action="{{ url_for('logout') }}" method="post" style="display:inline; margin-left:10px;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                <button type="submit" class="logout-btn">Logout</button>
+            </form>
+        </div>
+    </div>
+    {% if files %}
+    <table>
+        <tr>
+            <th>Filename</th>
+            <th>Size</th>
+            <th>Expires At</th>
+            <th>Actions</th>
+        </tr>
+        {% for f in files %}
+        <tr>
+            <td>{{ f.name }}</td>
+            <td>{{ f.size }}</td>
+            <td>{{ f.expires }}</td>
+            <td>
+                <button type="button" class="copy-btn" data-link="{{ url_for('download', token=f.token, filename=f.name, _external=True)|replace('http://', 'https://') }}">Copy Link</button>
+                <button type="button" class="copy-preview-btn" data-preview-link="{{ url_for('preview', token=f.token, filename=f.name, _external=True)|replace('http://', 'https://') }}">Copy Preview</button>
+                <!-- Delete own file -->
+                <form method="post" action="{{ url_for('user_delete_file') }}" style="display:inline; margin-left:8px;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                    <input type="hidden" name="token" value="{{ f.token }}" />
+                    <button type="submit" class="delete-btn">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+    <!-- Copy button script -->
+    <script>
+      document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('copy-btn')) {
+          const link = e.target.getAttribute('data-link');
+          navigator.clipboard.writeText(link).then(() => {
+            const orig = e.target.textContent;
+            e.target.textContent = 'Copied!';
+            setTimeout(() => e.target.textContent = orig, 2000);
+          });
+        }
+        if (e.target.classList.contains('copy-preview-btn')) {
+          const link = e.target.getAttribute('data-preview-link');
+          navigator.clipboard.writeText(link).then(() => {
+            const orig = e.target.textContent;
+            e.target.textContent = 'Copied!';
+            setTimeout(() => e.target.textContent = orig, 2000);
+          });
+        }
+      });
+    </script>
+    {% else %}
+    <p class="empty">You have not uploaded any files yet.</p>
+    {% endif %}
+</body>
+</html>
