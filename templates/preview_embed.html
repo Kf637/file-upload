@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta property="og:title" content="{{ title }}">
+  <meta property="og:type" content="{{ 'video.movie' if mimetype.startswith('video') else 'image' }}">
+  {% if mimetype.startswith('image') %}
+  <meta property="og:image" content="{{ preview_url }}">
+  {% elif mimetype.startswith('video') %}
+  <!-- Open Graph video tags -->
+  <meta property="og:video" content="{{ preview_url }}">
+  <meta property="og:video:url" content="{{ preview_url }}">
+  <meta property="og:video:secure_url" content="{{ preview_url }}">
+  <meta property="og:video:type" content="{{ mimetype }}">
+  <!-- Optional: specify width and height if known -->
+  {# <meta property="og:video:width" content="1280"> #}
+  {# <meta property="og:video:height" content="720"> #}
+  <!-- Twitter Player Card tags -->
+  <meta name="twitter:card" content="player">
+  <meta name="twitter:player" content="{{ preview_url }}">
+  <meta name="twitter:player:stream" content="{{ preview_url }}">
+  <meta name="twitter:player:stream:content_type" content="{{ mimetype }}">
+  {% endif %}
+  <title>{{ title }}</title>
+</head>
+<body>
+  {% if mimetype.startswith('image') %}
+    <img src="{{ preview_url }}" alt="{{ title }}" style="max-width:100%; height:auto;">
+  {% elif mimetype.startswith('video') %}
+    <video controls style="max-width:100%; height:auto;">
+      <source src="{{ preview_url }}" type="{{ mimetype }}">
+      Your browser does not support the video tag.
+    </video>
+  {% else %}
+    <p>Preview not available for this file type.</p>
+  {% endif %}
+</body>
+</html>
