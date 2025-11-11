@@ -7,4 +7,3 @@ waitress
 ipaddress
 python-dotenv
 requests
-bcrypt

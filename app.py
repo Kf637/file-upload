@@ -32,8 +32,6 @@ import secrets
 import logging
 import requests
 import shutil
-import bcrypt
-import hmac
 
 # Load environment variables from .env in project root
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -204,25 +202,6 @@ def get_db_connection():
 def generate_token(length=TOKEN_LENGTH):
     # Use cryptographically secure random token generation
     return secrets.token_urlsafe(length)[:length]
-
-
-def hash_password(password):
-    """Hash a password using bcrypt."""
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-
-def verify_password(password, hashed):
-    """Verify a password against a bcrypt hash. Also supports legacy SHA-256 hashes."""
-    try:
-        # Try bcrypt first
-        return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
-    except (ValueError, AttributeError):
-        # Fall back to legacy SHA-256 for backward compatibility during migration
-        # Note: SHA-256 is not recommended for password hashing, but we need to support
-        # existing hashes. On successful login, these will be upgraded to bcrypt.
-        sha256_hash = hashlib.sha256(password.encode()).hexdigest()  # nosec - legacy compatibility only
-        # Use constant-time comparison to prevent timing attacks
-        return hmac.compare_digest(hashed, sha256_hash)
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -517,17 +496,11 @@ def login():
             return render_template("login.html", site_key=TURNSTILE_SITE_KEY)
         password = request.form.get("password")
         logger.info(f"Login attempt: username={username} ip={get_client_ip()}")
+        hashed = hashlib.sha256(password.encode()).hexdigest()
         conn = get_user_db_connection()
         cur = conn.execute("SELECT password FROM users WHERE username = ?", (username,))
         row = cur.fetchone()
-        if row and verify_password(password, row[0]):
-            # If using legacy SHA-256 hash, upgrade to bcrypt
-            if not row[0].startswith('$2b$'):
-                new_hash = hash_password(password)
-                conn.execute(
-                    "UPDATE users SET password = ? WHERE username = ?",
-                    (new_hash, username),
-                )
+        if row and row[0] == hashed:
             session["username"] = username
             # record client IP
             conn.execute(
@@ -745,7 +718,7 @@ def API_admin_createuser():
         flash('User already exists')
         return redirect(url_for('admin'))
     conn_check.close()
-    hashed = hash_password(p)
+    hashed = hashlib.sha256(p.encode()).hexdigest()
     new_api_key = generate_token(64)
     conn_insert = get_user_db_connection()
     try:
@@ -844,7 +817,7 @@ def API_admin_changepassword():
             return jsonify({'error': 'Username cannot be empty'}), 400
         flash('Username cannot be empty')
         return redirect(url_for('admin'))
-    hashed = hash_password(p)
+    hashed = hashlib.sha256(p.encode()).hexdigest()
     conn_update = get_user_db_connection()
     conn_update.execute('UPDATE users SET password = ? WHERE username = ?', (hashed, u))
     conn_update.commit()

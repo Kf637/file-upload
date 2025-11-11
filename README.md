@@ -5,7 +5,7 @@ This repository contains a Flask-based file upload application. It allows authen
 ## Features
 
 - SQLite databases for files, users, and banned IP addresses (created automatically on startup)
-- User authentication with **bcrypt** hashed passwords (with automatic migration from legacy SHA-256)
+- User authentication with **SHA-256** hashed passwords
 - Role-based account types (`Limited`, `user`, `admin`) controlling upload size and access
 - Adjustable file expiration when uploading
 - Background cleanup of expired or missing files
@@ -17,11 +17,9 @@ This repository contains a Flask-based file upload application. It allows authen
 
 ## Security Features
 
-- **Strong password hashing**: Uses bcrypt for password storage (resistant to brute-force attacks)
-- **Automatic hash upgrade**: Legacy SHA-256 hashes are automatically upgraded to bcrypt on login
+- **Password hashing**: Uses SHA-256 for password storage
 - **Secure token generation**: All tokens use cryptographically secure random number generation
 - **File type validation**: Blocks dangerous executable file types including double extensions
-- **Constant-time password comparison**: Prevents timing attacks
 - **Secure session cookies**: HTTPOnly, Secure, and SameSite flags enabled
 - **Content Security Policy**: Implemented via Flask-Talisman
 - **CSRF protection**: Enabled for all state-changing operations
