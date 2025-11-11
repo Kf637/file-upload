@@ -5,13 +5,24 @@ This repository contains a Flask-based file upload application. It allows authen
 ## Features
 
 - SQLite databases for files, users, and banned IP addresses (created automatically on startup)
-- User authentication with SHA‑256 hashed passwords
+- User authentication with **SHA-256** hashed passwords
 - Role-based account types (`Limited`, `user`, `admin`) controlling upload size and access
 - Adjustable file expiration when uploading
 - Background cleanup of expired or missing files
 - IP banning support
 - Rate limiting via `Flask-Limiter`
 - Uses the `CF-Connecting-IP` header to obtain the real client IP when running behind a Cloudflare tunnel
+- **File type validation** to block dangerous executables (.exe, .bat, .sh, etc.)
+- **Cryptographically secure token generation** using the `secrets` module
+
+## Security Features
+
+- **Password hashing**: Uses SHA-256 for password storage
+- **Secure token generation**: All tokens use cryptographically secure random number generation
+- **File type validation**: Blocks dangerous executable file types including double extensions
+- **Secure session cookies**: HTTPOnly, Secure, and SameSite flags enabled
+- **Content Security Policy**: Implemented via Flask-Talisman
+- **CSRF protection**: Enabled for all state-changing operations
 
 ## Quick Start
 

@@ -200,18 +200,8 @@ def get_db_connection():
 
 # Generate a random token
 def generate_token(length=TOKEN_LENGTH):
-    chars = string.ascii_letters + string.digits
-    conn = get_db_connection()
-    try:
-        while True:
-            token = "".join(random.choice(chars) for _ in range(length))
-            exists = conn.execute(
-                "SELECT 1 FROM files WHERE token = ?", (token,)
-            ).fetchone()
-            if not exists:
-                return token
-    finally:
-        conn.close()
+    # Use cryptographically secure random token generation
+    return secrets.token_urlsafe(length)[:length]
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -254,6 +244,12 @@ def upload_file():
         )
         if not uploaded or uploaded.filename == "":
             return render_template("upload.html", error="No file selected")
+        # Validate filename is safe (not a dangerous executable)
+        if not is_safe_filename(uploaded.filename):
+            logger.warning(
+                f"Dangerous file upload blocked: user={session.get('username')} ip={get_client_ip()} filename={uploaded.filename}"
+            )
+            return render_template("upload.html", error="File type not allowed for security reasons")
         original_name = secure_filename(uploaded.filename)
         token = generate_token()
         stored_name = f"{token}_{original_name}"
@@ -453,6 +449,31 @@ USERNAME_PATTERN = r'^[a-z0-9]{1,150}$'
 TOKEN_PATTERN = r'^[A-Za-z0-9]+$'
 USERNAME_REGEX = re.compile(USERNAME_PATTERN)
 TOKEN_REGEX = re.compile(TOKEN_PATTERN)
+
+# Dangerous file extensions that should be blocked
+DANGEROUS_EXTENSIONS = {
+    '.exe', '.bat', '.cmd', '.com', '.pif', '.scr', '.vbs', '.js', '.jar',
+    '.msi', '.app', '.deb', '.rpm', '.dmg', '.pkg', '.sh', '.bash', '.ps1',
+    '.psm1', '.dll', '.so', '.dylib', '.sys', '.drv', '.ocx', '.cpl'
+}
+
+def is_safe_filename(filename):
+    """Check if a filename is safe to upload (not a dangerous executable)."""
+    if not filename:
+        return False
+    # Get the file extension
+    _, ext = os.path.splitext(filename.lower())
+    # Block dangerous extensions
+    if ext in DANGEROUS_EXTENSIONS:
+        return False
+    # Additional check: ensure no double extensions that could bypass filters
+    # e.g., file.pdf.exe
+    parts = filename.lower().split('.')
+    if len(parts) >= 2:
+        for part in parts[1:]:  # skip the base name
+            if f'.{part}' in DANGEROUS_EXTENSIONS:
+                return False
+    return True
 
 # Login routes
 @app.route("/login", methods=["GET", "POST"])
@@ -797,9 +818,10 @@ def API_admin_changepassword():
         flash('Username cannot be empty')
         return redirect(url_for('admin'))
     hashed = hashlib.sha256(p.encode()).hexdigest()
-    conn_u.execute('UPDATE users SET password = ? WHERE username = ?', (hashed, u))
-    conn_u.commit()
-    conn_u.close()
+    conn_update = get_user_db_connection()
+    conn_update.execute('UPDATE users SET password = ? WHERE username = ?', (hashed, u))
+    conn_update.commit()
+    conn_update.close()
     logger.info(f"Admin {auth_user} reset password for user={u}")
     if api_key:
         return jsonify({'status': 'ok', 'username': u}), 200
@@ -968,7 +990,7 @@ def API_upload():
     api_key = request.headers.get("X-API-Key") or request.args.get("X-API-Key")
     if not api_key:
         return jsonify({"error": "API key required"}), 401
-    logger.info(f"API upload request: api_key={api_key} ip={get_client_ip()}")
+    logger.info(f"API upload request: api_key=***masked*** ip={get_client_ip()}")
     # validate API key and fetch user role
     conn_u = get_user_db_connection()
     row = conn_u.execute(
@@ -982,6 +1004,13 @@ def API_upload():
     file = request.files.get("file")
     if not file or not file.filename:
         return jsonify({"error": "No file provided"}), 400
+    # Validate filename is safe
+    if not is_safe_filename(file.filename):
+        # Log without sensitive data
+        logger.warning(
+            f"Dangerous file upload blocked: api_key=***masked*** ip={get_client_ip()} filename={file.filename}"
+        )
+        return jsonify({"error": "File type not allowed for security reasons"}), 400
     original_name = secure_filename(file.filename)
     token = generate_token()
     stored_name = f"{token}_{original_name}"
@@ -1084,6 +1113,13 @@ def API_public_upload():
         conn.close()
         logger.warning(f"Public upload missing file: ip={ip}")
         return jsonify({"error": "No file provided"}), 400
+    # Validate filename is safe
+    if not is_safe_filename(file.filename):
+        conn.close()
+        logger.warning(
+            f"Dangerous public file upload blocked: ip={ip} filename={file.filename}"
+        )
+        return jsonify({"error": "File type not allowed for security reasons"}), 400
     original_name = secure_filename(file.filename)
     token = generate_token()
     stored_name = f"{token}_{original_name}"
