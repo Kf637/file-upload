@@ -217,9 +217,10 @@ def verify_password(password, hashed):
         # Try bcrypt first
         return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
     except (ValueError, AttributeError):
-        # Fall back to legacy SHA-256 for backward compatibility
-        # This should only be used during migration
-        sha256_hash = hashlib.sha256(password.encode()).hexdigest()
+        # Fall back to legacy SHA-256 for backward compatibility during migration
+        # Note: SHA-256 is not recommended for password hashing, but we need to support
+        # existing hashes. On successful login, these will be upgraded to bcrypt.
+        sha256_hash = hashlib.sha256(password.encode()).hexdigest()  # nosec - legacy compatibility only
         # Use constant-time comparison to prevent timing attacks
         return hmac.compare_digest(hashed, sha256_hash)
 
@@ -1016,7 +1017,7 @@ def API_upload():
     api_key = request.headers.get("X-API-Key") or request.args.get("X-API-Key")
     if not api_key:
         return jsonify({"error": "API key required"}), 401
-    logger.info(f"API upload request: api_key={api_key} ip={get_client_ip()}")
+    logger.info(f"API upload request: api_key=***masked*** ip={get_client_ip()}")
     # validate API key and fetch user role
     conn_u = get_user_db_connection()
     row = conn_u.execute(
@@ -1032,8 +1033,9 @@ def API_upload():
         return jsonify({"error": "No file provided"}), 400
     # Validate filename is safe
     if not is_safe_filename(file.filename):
+        # Log without sensitive data
         logger.warning(
-            f"Dangerous file upload blocked: api_key={api_key[:8]}... ip={get_client_ip()} filename={file.filename}"
+            f"Dangerous file upload blocked: api_key=***masked*** ip={get_client_ip()} filename={file.filename}"
         )
         return jsonify({"error": "File type not allowed for security reasons"}), 400
     original_name = secure_filename(file.filename)
