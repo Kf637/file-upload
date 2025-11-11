@@ -32,6 +32,8 @@ import secrets
 import logging
 import requests
 import shutil
+import bcrypt
+import hmac
 
 # Load environment variables from .env in project root
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -200,18 +202,26 @@ def get_db_connection():
 
 # Generate a random token
 def generate_token(length=TOKEN_LENGTH):
-    chars = string.ascii_letters + string.digits
-    conn = get_db_connection()
+    # Use cryptographically secure random token generation
+    return secrets.token_urlsafe(length)[:length]
+
+
+def hash_password(password):
+    """Hash a password using bcrypt."""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+
+def verify_password(password, hashed):
+    """Verify a password against a bcrypt hash. Also supports legacy SHA-256 hashes."""
     try:
-        while True:
-            token = "".join(random.choice(chars) for _ in range(length))
-            exists = conn.execute(
-                "SELECT 1 FROM files WHERE token = ?", (token,)
-            ).fetchone()
-            if not exists:
-                return token
-    finally:
-        conn.close()
+        # Try bcrypt first
+        return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+    except (ValueError, AttributeError):
+        # Fall back to legacy SHA-256 for backward compatibility
+        # This should only be used during migration
+        sha256_hash = hashlib.sha256(password.encode()).hexdigest()
+        # Use constant-time comparison to prevent timing attacks
+        return hmac.compare_digest(hashed, sha256_hash)
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -254,6 +264,12 @@ def upload_file():
         )
         if not uploaded or uploaded.filename == "":
             return render_template("upload.html", error="No file selected")
+        # Validate filename is safe (not a dangerous executable)
+        if not is_safe_filename(uploaded.filename):
+            logger.warning(
+                f"Dangerous file upload blocked: user={session.get('username')} ip={get_client_ip()} filename={uploaded.filename}"
+            )
+            return render_template("upload.html", error="File type not allowed for security reasons")
         original_name = secure_filename(uploaded.filename)
         token = generate_token()
         stored_name = f"{token}_{original_name}"
@@ -454,6 +470,31 @@ TOKEN_PATTERN = r'^[A-Za-z0-9]+$'
 USERNAME_REGEX = re.compile(USERNAME_PATTERN)
 TOKEN_REGEX = re.compile(TOKEN_PATTERN)
 
+# Dangerous file extensions that should be blocked
+DANGEROUS_EXTENSIONS = {
+    '.exe', '.bat', '.cmd', '.com', '.pif', '.scr', '.vbs', '.js', '.jar',
+    '.msi', '.app', '.deb', '.rpm', '.dmg', '.pkg', '.sh', '.bash', '.ps1',
+    '.psm1', '.dll', '.so', '.dylib', '.sys', '.drv', '.ocx', '.cpl'
+}
+
+def is_safe_filename(filename):
+    """Check if a filename is safe to upload (not a dangerous executable)."""
+    if not filename:
+        return False
+    # Get the file extension
+    _, ext = os.path.splitext(filename.lower())
+    # Block dangerous extensions
+    if ext in DANGEROUS_EXTENSIONS:
+        return False
+    # Additional check: ensure no double extensions that could bypass filters
+    # e.g., file.pdf.exe
+    parts = filename.lower().split('.')
+    if len(parts) >= 2:
+        for part in parts[1:]:  # skip the base name
+            if f'.{part}' in DANGEROUS_EXTENSIONS:
+                return False
+    return True
+
 # Login routes
 @app.route("/login", methods=["GET", "POST"])
 @limiter.limit("100 per 5 minutes")
@@ -475,11 +516,17 @@ def login():
             return render_template("login.html", site_key=TURNSTILE_SITE_KEY)
         password = request.form.get("password")
         logger.info(f"Login attempt: username={username} ip={get_client_ip()}")
-        hashed = hashlib.sha256(password.encode()).hexdigest()
         conn = get_user_db_connection()
         cur = conn.execute("SELECT password FROM users WHERE username = ?", (username,))
         row = cur.fetchone()
-        if row and row[0] == hashed:
+        if row and verify_password(password, row[0]):
+            # If using legacy SHA-256 hash, upgrade to bcrypt
+            if not row[0].startswith('$2b$'):
+                new_hash = hash_password(password)
+                conn.execute(
+                    "UPDATE users SET password = ? WHERE username = ?",
+                    (new_hash, username),
+                )
             session["username"] = username
             # record client IP
             conn.execute(
@@ -697,7 +744,7 @@ def API_admin_createuser():
         flash('User already exists')
         return redirect(url_for('admin'))
     conn_check.close()
-    hashed = hashlib.sha256(p.encode()).hexdigest()
+    hashed = hash_password(p)
     new_api_key = generate_token(64)
     conn_insert = get_user_db_connection()
     try:
@@ -796,10 +843,11 @@ def API_admin_changepassword():
             return jsonify({'error': 'Username cannot be empty'}), 400
         flash('Username cannot be empty')
         return redirect(url_for('admin'))
-    hashed = hashlib.sha256(p.encode()).hexdigest()
-    conn_u.execute('UPDATE users SET password = ? WHERE username = ?', (hashed, u))
-    conn_u.commit()
-    conn_u.close()
+    hashed = hash_password(p)
+    conn_update = get_user_db_connection()
+    conn_update.execute('UPDATE users SET password = ? WHERE username = ?', (hashed, u))
+    conn_update.commit()
+    conn_update.close()
     logger.info(f"Admin {auth_user} reset password for user={u}")
     if api_key:
         return jsonify({'status': 'ok', 'username': u}), 200
@@ -982,6 +1030,12 @@ def API_upload():
     file = request.files.get("file")
     if not file or not file.filename:
         return jsonify({"error": "No file provided"}), 400
+    # Validate filename is safe
+    if not is_safe_filename(file.filename):
+        logger.warning(
+            f"Dangerous file upload blocked: api_key={api_key[:8]}... ip={get_client_ip()} filename={file.filename}"
+        )
+        return jsonify({"error": "File type not allowed for security reasons"}), 400
     original_name = secure_filename(file.filename)
     token = generate_token()
     stored_name = f"{token}_{original_name}"
@@ -1084,6 +1138,13 @@ def API_public_upload():
         conn.close()
         logger.warning(f"Public upload missing file: ip={ip}")
         return jsonify({"error": "No file provided"}), 400
+    # Validate filename is safe
+    if not is_safe_filename(file.filename):
+        conn.close()
+        logger.warning(
+            f"Dangerous public file upload blocked: ip={ip} filename={file.filename}"
+        )
+        return jsonify({"error": "File type not allowed for security reasons"}), 400
     original_name = secure_filename(file.filename)
     token = generate_token()
     stored_name = f"{token}_{original_name}"
